@@ -175,7 +175,7 @@ memory, then steers with the keyboard while time is held. Its best game scored
   through eight hit positions, so successive bounces sweep the field and reach
   the last bricks.
 - **Capsules:** these are worth 1,000 points each. The bot catches them while
-  the ball is heading up, which roughly quadrupled its scoring rate.
+  the ball is heading up, which more than tripled its scoring rate.
 
 Two lessons from getting it going:
 - **The demo:** after a game ends, the game's attract-mode demo takes over and
