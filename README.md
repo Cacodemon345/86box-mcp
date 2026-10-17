@@ -132,6 +132,27 @@ bar on, and the mouse at its slowest speed. The labelled card corners are in
 `examples/solitaire/lib`. If your cards look different, `solbot.py collect`
 gathers new corners on a contact sheet for labelling.
 
+### SkiFree: the maximum score, 32,767
+
+![SkiFree's High Scores box showing 32767](docs/images/skifree-32767.gif)
+
+[`examples/skifree`](examples/skifree) plays the original 16-bit SkiFree 1.0
+in Windows 3.11. The bot reads the game's state from guest memory every tick
+and plays with the keyboard while time is held.
+
+In Freestyle it scored **32,767**, the largest value SkiFree's 16-bit score
+can hold, and skied across the finish line into the High Scores box:
+- **Finding the rules:** a [decompilation of the later 32-bit
+  version](https://github.com/yuv422/skifree_decomp), checked against 1.0 in
+  memory.
+- **The trick:** a backscratcher scores 8 points for every tick in the air,
+  and you can hop from a standstill. So the bot hops in place all the way down
+  the course, mixing in uphill steps so the hops don't drift it off the end.
+- **The finish:** it chose each tick's trick to land exactly on the limit.
+
+Another run outran the Abominable Snowman, kept going until the distance
+wrapped round, and came back onto the course for a second lap.
+
 ## Quickstart
 
 Needs Linux and Python 3.11+. Get the code, and 86Box from our fork:
