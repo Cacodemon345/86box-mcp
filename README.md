@@ -150,8 +150,14 @@ can hold, and skied across the finish line into the High Scores box:
   the course, mixing in uphill steps so the hops don't drift it off the end.
 - **The finish:** it chose each tick's trick to land exactly on the limit.
 
-Another run outran the Abominable Snowman, kept going until the distance
-wrapped round, and came back onto the course for a second lap.
+Another run outran the Abominable Snowman. Turbo skiing is faster than he
+is, so the bot plans its lane a screen ahead to avoid crashing. It kept going
+until the distance wrapped round (y is a 16-bit number, and past 2,047 m the
+distance shows as negative), and came back onto the course for a second lap.
+Here it crashes just after the wrap, and gets up and away before he reaches
+it:
+
+![The skier crashes, gets up and outruns the Abominable Snowman](docs/images/skifree-yeti-outrun.gif)
 
 ## Quickstart
 
