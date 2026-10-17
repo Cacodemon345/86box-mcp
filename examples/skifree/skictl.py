@@ -1,6 +1,8 @@
 """Keep a Windows 3.11 VM with SkiFree running, and take Python snippets to run against it.
 
-    python skictl.py serve [--record DIR]     # boots the VM, then listens on skictl.sock
+    python skictl.py serve [--record DIR] [--vm DIR] [--dos] [--sock PATH]
+                                              # boots the VM, then listens on skictl.sock
+                                              # (--dos: stop at the DOS prompt, don't start Windows)
     python skictl.py run 'code...'            # runs code with m (a solbot Machine) in scope
 
 Snippets share one namespace across calls, so state (and helper functions) persist. Whatever a
@@ -40,14 +42,16 @@ def type_text(m: Machine, text: str) -> None:
         m.step(30)
 
 
-def boot(record: str | None) -> Machine:
-    vm = VM(VM_DIR)
+def boot(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False) -> Machine:
+    vm = VM(vm_dir)
     vm.start(held=True)
     m = Machine(vm)
     if record:
         Path(record).mkdir(parents=True, exist_ok=True)
         m.a.call(f"record start 50 {record}")
     m.a.wait_text("C:\\>", 60000)
+    if dos:
+        return m
     for ch in "WIN\n":
         code, _ = K.char_keys(ch)
         m.a.keys(True, [code])
@@ -64,8 +68,8 @@ PROGRESS_DIR = Path(os.environ["SKICTL_PROGRESS_DIR"]) if os.environ.get("SKICTL
 PROGRESS_EVERY_S = 180
 
 
-def serve(record: str | None) -> None:
-    m = boot(record)
+def serve(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False) -> None:
+    m = boot(record, vm_dir, dos)
     last = [0.0]
 
     def progress(force: bool = False) -> None:
@@ -127,7 +131,13 @@ def run(code: str) -> None:
 
 
 if __name__ == "__main__":
+    def opt(name):
+        return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+    if opt("--sock"):
+        SOCK = Path(opt("--sock"))
     if sys.argv[1] == "serve":
-        serve(sys.argv[sys.argv.index("--record") + 1] if "--record" in sys.argv else None)
+        serve(opt("--record"), Path(opt("--vm")).expanduser() if opt("--vm") else VM_DIR, "--dos" in sys.argv)
     else:
-        run(sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read())
+        code = [a for a in sys.argv[2:] if a not in ("--sock", opt("--sock"))]
+        run(code[0] if code else sys.stdin.read())
