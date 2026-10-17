@@ -1,23 +1,22 @@
 # Changes to 86Box
 
-Everything this project needs from 86Box lives on the `automation-socket`
-branch of the fork at https://github.com/dafugg/86Box (cloned into `86box/`,
-with `upstream` pointing at 86Box/86Box). Keep this list current: it is the
-checklist for an upstream pull request.
+Everything this project needs from 86Box is now in upstream 86Box `master`.
+Both pull requests were merged on 2026-10-17:
 
-The branch is three commits on top of upstream `master`, and they go upstream
-as two pull requests:
+| Pull request | What it adds |
+|---|---|
+| [#8365](https://github.com/86Box/86Box/pull/8365) | The automation socket (`mouse: let input through when an automation client sends it` and `Add an opt-in automation control socket`) |
+| [#8361](https://github.com/86Box/86Box/pull/8361) | `char_file: add an option to write output to the file immediately`. 86box-mcp's COM1 capture turns the option on. |
 
-| Branch | Commits | Pull request |
-|---|---|---|
-| `automation-pr` | `mouse: let input through when an automation client sends it`, then `Add an opt-in automation control socket` | The automation socket |
-| `char-file-flush` | `char_file: add an option to write output to the file immediately` | A separate small PR; 86box-mcp's COM1 capture turns the option on |
-| `automation-socket` | both of the above | What 86box-mcp builds against (`86BOX_COMMIT`) |
-| `ci-automation-pr` | `automation-pr` plus a CI commit | Test only: upstream's Linux, macOS and Windows workflows with `-D AUTOMATION=ON` |
+`86BOX_COMMIT` names the upstream commit with both, which is the merge of #8361.
+Build 86Box with `-D AUTOMATION=ON`; it's off by default, so official releases
+don't have the socket. [automation-code-guide.md](automation-code-guide.md)
+walks through the code.
 
-The branch before the rebase onto 2026-10-16 `master` is kept as the tag
-`automation-socket-pre-rebase`. [automation-code-guide.md](automation-code-guide.md)
-walks through the code for review.
+The rest of this page records how the change was designed, tested and
+proposed. The branches on the fork at https://github.com/dafugg/86Box
+(`automation-socket`, `automation-pr`, `char-file-flush`, and the tag
+`automation-socket-pre-rebase`) are kept for history.
 
 The automation socket is machine-level, not DOS-specific: keyboard input
 enters the emulated keyboard controller as scancodes, mouse input goes to the
@@ -44,20 +43,24 @@ empty macros, so default builds are unchanged.
 | `src/device/mouse_ps2.c`, `mouse_serial.c`, `mouse_bus.c` | Accept input when `mouse_capture \|\| mouse_automation` | Same; five one-line conditions |
 | `src/char/char_file.c` | A "Write to the file immediately" option (`flush`, off by default) on the COM and LPT File devices | The File backend's output can be followed live. Separate PR (`char-file-flush`) |
 
-## Behaviors worth discussing upstream
+## Design decisions (as merged)
 
 - **Mouse capture.** Mouse devices drop input unless the UI has captured the
   pointer. Setting `mouse_capture` from automation broke a visible window (the
-  UI hid the host cursor and forwarded host motion), so injected input sets a
-  separate `mouse_automation` flag that the devices also accept.
-- **Key pacing** (below) and **recording**: `record start <interval> <dir>`
-  writes PNGs from the frame hook, on the CPU thread, so a slow disk slows
-  emulation slightly while recording.
-- **`char_file` flush**: independent of automation, so it's a separate PR. It's an option, off by default, because both File devices write a byte at a time and a flush per byte only suits people who want the file live. Its label needs adding to the translations.
+  UI hid the host cursor and forwarded host motion). So injected input sets a
+  separate `mouse_automation` flag, which the PS/2, serial and bus mice also
+  accept.
 - **Key pacing.** Injecting several key events in the same instant overflows
-  the keyboard's 16-byte FIFO (extended keys plus Num Lock fake shifts are up
-  to 6 bytes each) and silently loses keys. The `key` command queues events
-  and delivers them 2 ms of emulated time apart.
+  the keyboard's 16-byte FIFO, because extended keys plus Num Lock fake shifts
+  are up to 6 bytes each, and keys get lost silently. The `key` command queues
+  events and delivers them 2 ms of emulated time apart.
+- **Recording.** `record start <interval> <dir>` writes PNGs from the frame
+  hook, on the CPU thread, so a slow disk slows emulation slightly while
+  recording.
+- **`char_file` flush.** This is independent of automation, so it went in as a
+  separate PR (#8361). It's an option, off by default. Both File devices write
+  one byte at a time, so a flush per byte only suits people who want the file
+  live. Its label is waiting to be added to the translations.
 
 ## Transports
 
@@ -83,7 +86,7 @@ Upstream builds Windows with MSYS2. Its CI workflows pass on the fork with the
 patch applied, but with the default `AUTOMATION=OFF`. The `ci-automation`
 branch runs the same MSYS2 workflow with `-D AUTOMATION=ON`.
 
-## Before proposing upstream
+## Before proposing upstream (done)
 
 Done:
 - Talked to the 86Box developers: they said it would be useful.
@@ -95,23 +98,23 @@ Done:
 - No compiler warnings from the change in the Linux GCC build.
 - The UNIX socket is created owner-only (umask around `bind()`), rather than
   `chmod`ed afterwards.
-
 - Upstream's Linux, macOS and Windows workflows, with `-D AUTOMATION=ON`
   (`ci-automation-pr`): all 36 jobs build, with no warnings in our files. The
   first run found two (an unused `listen_thread`, now joined on shutdown, and
   a false-positive uninitialized array); both are fixed.
 - The SDL frontend: the test suite passes on a `QT=OFF` build.
 
-Still to do:
-- Run the MSYS2-built binary on Windows. Only our MinGW cross-build has run
+- The PR descriptions followed upstream's template and disclosed the AI
+  assistance, as upstream's `CONTRIBUTING.md` requires.
+
+Still open after the merge:
+- Run an MSYS2-built binary on Windows. Only our MinGW cross-build has run
   there.
-- Decide whether `step` should also work while the UI pause is active.
-- Write the PR description from upstream's template, disclosing the AI
-  assistance as upstream's `CONTRIBUTING.md` requires.
+- Decide whether `step` should also work while the UI pause is active. The PR
+  asked; the merge didn't settle it.
+
 ## The change
 
-The whole change is the fork's `automation-socket` branch, compared with
-upstream: <https://github.com/86Box/86Box/compare/master...dafugg:86Box:automation-socket>.
-`86BOX_COMMIT` at the top of this repo names the fork commit that this
-version of the server expects. The build scripts warn if `86box/` doesn't
-contain it.
+The whole change as merged:
+<https://github.com/86Box/86Box/pull/8365/files> and
+<https://github.com/86Box/86Box/pull/8361/files>.

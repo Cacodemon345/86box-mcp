@@ -1,12 +1,12 @@
-# A reviewer's guide to the 86Box automation patch
+# A guide to the 86Box automation code
 
-The upstream pull request is two commits on `automation-pr`. This guide is
-for whoever puts their name on it: what each part does, why it's built that
-way, and the questions a reviewer is likely to ask. Read it with the code
-open.
+The automation socket was merged into 86Box in
+[#8365](https://github.com/86Box/86Box/pull/8365), as two commits. This guide
+covers what each part does, why it's built that way, and the questions people
+ask about it. Read it with the code open.
 
 ```sh
-git -C 86box log --stat upstream/master..automation-pr
+git -C 86box show --stat 96067f9f1 1b3985523   # the mouse flag, then the socket
 ```
 
 ## The idea in one paragraph
@@ -59,8 +59,8 @@ if (((debt_ns >= quantum_ns) || fast_forward || (automation == AUTOMATION_RUN))
   emulation is behind the wall clock. Unpaced steps would otherwise build up
   "debt", and the machine would race to catch up the moment you `release` it.
 - **`dopause` still wins.** The UI's pause stops everything, steps included.
-  Whether `step` should override the pause is an open question to raise in
-  review.
+  Whether `step` should override the pause is still open: the PR asked, and
+  the merge didn't settle it.
 
 ## `automation.c`, by section
 
@@ -96,8 +96,8 @@ happened during testing.
 **Mouse.** `mouse <dx> <dy> <buttons>` sets `mouse_automation = 1`, then
 uses the normal `mouse_scale()` and `mouse_set_buttons_ex()`. **Why not
 `mouse_capture`:** setting it made a visible window hide the host cursor and
-start forwarding host motion. Expect a reviewer to ask about this; it's the
-reason for commit 1.
+start forwarding host motion. That's the reason for the separate first
+commit.
 
 **Frames (`automation_frame`, `encode_png`, `record_frame`).** The hook in
 `video_blit_memtoscreen_monitor()` copies monitor 0's finished frame into
@@ -143,7 +143,7 @@ second, with wall time spent held excluded.
 - **The log** shows only the token's first 8 characters.
 - **`automation_close()`** removes the socket file and the token file.
 
-## Things a reviewer may push on (and what to say)
+## Questions people ask about it
 
 - **"Why not a Qt-only feature?"** The core is plain C with the platform's
   thread and socket calls, so both frontends work and headless runs need no

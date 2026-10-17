@@ -11,9 +11,9 @@ inside the guest, so it works from BIOS POST on, in any video mode, under any
 OS. Its main targets are DOS games and tools. It runs headless (good for
 servers and CI), or with the normal 86Box window if you want to watch.
 
-It is built on an opt-in **automation socket** added to 86Box itself, on the
-[`automation-socket` branch of our fork](https://github.com/dafugg/86Box/tree/automation-socket).
-We will open a pull request to upstream 86Box soon.
+It is built on an opt-in **automation socket** in 86Box itself, merged upstream
+in [#8365](https://github.com/86Box/86Box/pull/8365). It's off by default:
+build 86Box with `-D AUTOMATION=ON` to get it.
 
 > **Automating Windows 9x?** Use
 > [V9x Remote Agent](https://github.com/michaeldale/V9x-Remote-Agent) instead.
@@ -185,11 +185,11 @@ Two lessons from getting it going:
 
 ## Quickstart
 
-Needs Linux and Python 3.11+. Get the code, and 86Box from our fork:
+Needs Linux and Python 3.11+. Get the code, and 86Box:
 
 ```sh
 git clone https://github.com/dafugg/86box-mcp.git && cd 86box-mcp
-git clone -b automation-socket https://github.com/dafugg/86Box.git 86box
+git clone https://github.com/86Box/86Box.git 86box
 ```
 
 ### Build 86Box natively
@@ -238,8 +238,8 @@ or `/tmp`, because those are the only paths mounted into the container.
 This is how we develop it. Our build machine has no root access, so we can't
 install the packages, and upstream's AppImage packaging was broken when we
 tried it. The container gives a reproducible Debian toolchain on any host.
-Once the automation socket is merged upstream, neither will be needed: any
-86Box build will do.
+Any 86Box built with `-D AUTOMATION=ON` works; official releases are built
+without it.
 
 ### Or run 86Box on Windows
 
@@ -364,8 +364,8 @@ flowchart LR
 
 The automation socket (`86Box --automation <path> [--automation-hold]`) is a
 line protocol you can also use from scripts or `socat`. See
-[`doc/specifications/automation.md`](https://github.com/dafugg/86Box/blob/automation-socket/doc/specifications/automation.md)
-on the fork, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for every 86Box change.
+[`doc/specifications/automation.md`](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md)
+in 86Box, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for every 86Box change.
 
 ## Choosing a transport
 
@@ -388,14 +388,14 @@ only to `127.0.0.1`. 86Box refuses other addresses unless you add
 unencrypted, and whoever reaches the port with the token fully controls the
 emulated machine, memory included. The design follows
 [dosbox-automation's](https://dosbox-automation.org/0.85.1/automation/security/index.html).
-Details are in the [protocol doc](https://github.com/dafugg/86Box/blob/automation-socket/doc/specifications/automation.md#transports-and-security).
+Details are in the [protocol doc](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md#transports-and-security).
 
 ## Status and limitations
 
 This is an early release, built for developing our own DOS games and tools.
 
-- **86Box patch not upstream yet.** You need the fork until the pull request
-  lands.
+- **86Box must be built with `-D AUTOMATION=ON`.** The automation socket is in
+  upstream 86Box, but official releases are built without it.
 - **Windows: 86Box yes, the MCP server not yet.** 86Box with the automation
   socket has been built for 64-bit Windows and driven over TCP from a Linux
   machine with `vm_attach`. That covered boot, typing, screen text,
