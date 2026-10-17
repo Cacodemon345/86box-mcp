@@ -1,0 +1,20 @@
+[project]
+name = "box86mcp"
+version = "0.1.0"
+description = "MCP server for driving the 86Box PC emulator through its automation socket"
+license = "GPL-2.0-or-later"
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.3", "pillow>=10", "pycdlib>=1.14"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+box86mcp = "box86mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["box86mcp"]

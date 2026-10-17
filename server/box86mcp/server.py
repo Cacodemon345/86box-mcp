@@ -1,0 +1,742 @@
+"""MCP server exposing a headless 86Box machine as tools."""
+
+from __future__ import annotations
+
+import io
+import re
+import shutil
+import time
+from pathlib import Path
+
+from mcp.server.mcpserver import Image, MCPServer
+from PIL import Image as PILImage
+
+from . import disk
+from . import keys as K
+from .protocol import AutomationError
+from .vm import VM, write_config
+
+mcp = MCPServer(
+    "86box",
+    instructions=(
+        "Drives a headless 86Box PC emulator. Start with vm_start. The machine starts HELD: emulated time "
+        "only advances inside tool calls (step, act, press_keys, type_text, wait_for_text, dos_run), so the "
+        "game or program waits while you think. Use release to let it run in real time. Prefer screen_text "
+        "over screenshot in text modes; it is cheaper and exact."
+    ),
+)
+
+_vm: VM | None = None
+_held = True
+
+
+def vm() -> VM:
+    if _vm is None or not _vm.running():
+        raise AutomationError("no VM running; call vm_start first")
+    return _vm
+
+
+def _advance(ms: int) -> None:
+    """Let ms of emulated time pass: exactly, if held; approximately, if free-running."""
+    if ms <= 0:
+        return
+    if _held:
+        vm().auto.step(ms)
+    else:
+        time.sleep(ms / 1000)
+
+
+def _snapshot(max_width: int) -> tuple[bytes, dict]:
+    v = vm()
+    info = v.auto.screenshot()
+    img = PILImage.open(io.BytesIO(info.pop("png")))
+    img.load()
+    if max_width and img.width > max_width:
+        img = img.resize((max_width, round(img.height * max_width / img.width)), PILImage.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue(), info
+
+
+def _time_note(info: dict) -> str:
+    return f"emulated t={info.get('ms')}ms frame={info.get('frames')}"
+
+
+# Lifecycle -----------------------------------------------------------------
+
+
+@mcp.tool()
+def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int = 63,
+              nvr_dir: str = "~/tools/86box/primed-nvr/dx2-66-vlb") -> str:
+    """Create a 486DX2-66 VM in vm_dir with a blank hard disk, ready for installing an OS from floppy or CD.
+
+    The default geometry, 993/16/63, matches a 512 MB CompactFlash card. Boot media: floppy_insert or
+    cdrom_insert, then vm_start.
+    """
+    d = Path(vm_dir).expanduser()
+    if (d / "86box.cfg").exists():
+        raise FileExistsError(f"{d} already has an 86box.cfg")
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "hdd.img", "wb") as f:
+        f.truncate(cylinders * heads * sectors * 512)
+    write_config(d, cylinders, heads, sectors)
+    nvr = Path(nvr_dir).expanduser()
+    if nvr.is_dir():
+        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
+    mb = cylinders * heads * sectors * 512 // (1024 * 1024)
+    return f"created {d} with a blank {mb} MB disk ({cylinders}/{heads}/{sectors})"
+
+
+@mcp.tool()
+def dos_create_vm(vm_dir: str, base_image: str = "~/tools/86box/vms/dos622-base.img", cylinders: int = 993,
+                  heads: int = 16, sectors: int = 63, autoexec: str = "@ECHO OFF\nPROMPT $P$G\n",
+                  nvr_dir: str = "~/tools/86box/primed-nvr/dx2-66-vlb") -> str:
+    """Create a new 486DX2-66 VM in vm_dir with a fresh bootable DOS hard disk.
+
+    The default geometry, 993/16/63, matches a 512 MB CompactFlash card. The disk uses 86Box's RAM-disk
+    speed (no seek or rotation delays). DOS system files are taken from base_image.
+    """
+    d = Path(vm_dir).expanduser()
+    if (d / "86box.cfg").exists():
+        raise FileExistsError(f"{d} already has an 86box.cfg")
+    d.mkdir(parents=True, exist_ok=True)
+    img = d / "hdd.img"
+    disk.make_dos_disk(img, Path(base_image).expanduser(), (cylinders, heads, sectors))
+    disk.write_text(img, "AUTOEXEC.BAT", autoexec)
+    write_config(d, cylinders, heads, sectors)
+    nvr = Path(nvr_dir).expanduser()
+    if nvr.is_dir():
+        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
+    mb = cylinders * heads * sectors * 512 // (1024 * 1024)
+    return f"created {d} with a {mb} MB DOS disk ({cylinders}/{heads}/{sectors})"
+
+
+@mcp.tool()
+def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None = None) -> str:
+    """Copy host files/directories onto the VM's C: drive, e.g. dest_dir="\\GAME".
+
+    The VM must be stopped (vm_stop): 86Box caches the disk, so writing to it while running corrupts it.
+    No size limit, unlike dos_put_floppy. vm_dir defaults to the last VM started.
+    """
+    if _vm is not None and _vm.running():
+        raise AutomationError("stop the VM first (vm_stop); then dos_install_files, then vm_start")
+    target = VM(vm_dir) if vm_dir else _vm
+    if target is None:
+        raise ValueError("no VM known yet; pass vm_dir")
+    copied = disk.put_files(target.hdd_image(), paths, dest_dir)
+    return f"copied {', '.join(copied)} to C:{dest_dir}"
+
+
+@mcp.tool()
+def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False, com1_log: bool = False) -> str:
+    """Boot the 86Box machine whose 86box.cfg lives in vm_dir. vm_dir defaults to the last VM.
+
+    held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
+    window=True shows the 86Box window on the host's display so a person can watch (and also type);
+    the default runs without a window. com1_log=True captures COM1 output for serial_read and
+    wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
+    """
+    global _vm, _held
+    if _vm is not None and _vm.running():
+        _vm.stop()
+    if vm_dir is None:
+        if _vm is None:
+            raise ValueError("pass vm_dir")
+        vm_dir = str(_vm.vm_dir)
+    _vm = VM(vm_dir)
+    status = _vm.start(held=held, window=window, com1_log=com1_log)
+    _held = held
+    return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{', windowed' if window else ''}). Log: {_vm.log_path}"
+
+
+@mcp.tool()
+def vm_attach(endpoint: str, token: str | None = None) -> str:
+    """Control an 86Box that is already running, possibly on another machine, instead of starting one.
+
+    endpoint: "tcp:<host>:<port>" or "unix:<path>". token: the contents of the token file that 86Box
+    wrote at startup (required for TCP). Paths in later tool calls (media images, record_start
+    directories) are paths on that machine; screenshots come back over the connection.
+    """
+    global _vm, _held
+    if _vm is not None and _vm.running():
+        _vm.stop()
+    from .vm import AttachedVM
+
+    _vm = AttachedVM(endpoint, token)
+    status = _vm.auto.status()
+    _held = bool(status.get("held"))
+    info = _vm.auto.info()
+    return (f"attached to 86Box {status.get('version')} at {endpoint}: {info.get('machine_name')}, "
+            f"{'held' if _held else 'running in real time'}, emulated t={status.get('ms')}ms")
+
+
+@mcp.tool()
+def vm_stop(power_off: bool = True) -> str:
+    """Power off the emulated machine and exit 86Box.
+
+    For a VM joined with vm_attach, power_off=False just disconnects and leaves it running.
+    """
+    from .vm import AttachedVM
+
+    if _vm is None or not _vm.running():
+        return "no VM running"
+    if isinstance(_vm, AttachedVM):
+        if not power_off:
+            _vm.stop()
+            return "disconnected; the VM is still running"
+        _vm.power_off()
+        return "powered off the attached VM (86Box exited)"
+    _vm.stop()
+    return "stopped"
+
+
+@mcp.tool()
+def vm_status() -> dict:
+    """Emulated time, frame count, held state, video mode, and the tail of the 86Box log."""
+    v = vm()
+    s = v.auto.status()
+    s.pop("ok", None)
+    s["log_tail"] = v.log_tail(10)
+    return s
+
+
+@mcp.tool()
+def vm_info() -> dict:
+    """What the running emulator actually is: 86Box version, machine, CPU and clock, RAM, video and
+    sound cards, mounted disk/floppy/CD images, emulation speed, and resets so far.
+
+    hard_resets/soft_resets count every CPU reset, including ones the guest causes itself (a triple
+    fault, or a reboot through the keyboard controller). A soft_resets count that goes up unexpectedly
+    usually means a crash. speed_percent is measured while running; 100 = real time.
+    """
+    return vm().auto.info()
+
+
+@mcp.tool()
+def hold() -> str:
+    """Freeze emulated time between tool calls (turn-based mode)."""
+    global _held
+    _held = True
+    return _time_note(vm().auto.hold())
+
+
+@mcp.tool()
+def release() -> str:
+    """Let the machine run in real time between tool calls."""
+    global _held
+    _held = False
+    return _time_note(vm().auto.release())
+
+
+@mcp.tool()
+def step(ms: int) -> str:
+    """Run exactly ms milliseconds of emulated time (as fast as the host allows), then hold again."""
+    return _time_note(vm().auto.step(ms))
+
+
+@mcp.tool()
+def reset(kind: str = "hard") -> str:
+    """Reset the machine: kind='hard' (power cycle) or 'cad' (Ctrl+Alt+Del)."""
+    if kind not in ("hard", "cad"):
+        raise ValueError("kind must be 'hard' or 'cad'")
+    return _time_note(vm().auto.call(f"reset {kind}"))
+
+
+# Screen --------------------------------------------------------------------
+
+
+@mcp.tool()
+def screenshot(max_width: int = 640) -> list:
+    """The current frame as an image, scaled down to max_width pixels wide (0 = native size)."""
+    png, info = _snapshot(max_width)
+    return [Image(data=png, format="png"), f"{info['w']}x{info['h']} native, {_time_note(info)}"]
+
+
+@mcp.tool()
+def screen_text() -> str:
+    """The text-mode screen as plain text (CP437 decoded), with video mode and cursor position."""
+    return vm().auto.text().render()
+
+
+# Input ---------------------------------------------------------------------
+
+
+@mcp.tool()
+def press_keys(keys: list[str], hold_ms: int = 60, gap_ms: int = 60) -> str:
+    """Press keys or combos in sequence, e.g. ["enter"], ["ctrl+c"], ["up","up","space"], ["alt+f","x"].
+
+    Names: letters, digits, f1-f12, esc, enter, space, tab, backspace, up/down/left/right, home/end,
+    pageup/pagedown, insert/delete, ctrl/alt/shift (and l/r variants), kp0-kp9, or hex scancodes like 0x1c.
+    """
+    v = vm()
+    for combo in keys:
+        codes = K.parse_combo(combo)
+        v.auto.keys(True, codes)
+        _advance(hold_ms)
+        v.auto.keys(False, list(reversed(codes)))
+        _advance(gap_ms)
+    return f"pressed {len(keys)} key(s); {_time_note(v.auto.status())}"
+
+
+def _type(text: str, ms_per_key: int) -> None:
+    v = vm()
+    shift = K.scancode("shift")
+    for ch in text:
+        code, shifted = K.char_keys(ch)
+        if shifted:
+            v.auto.keys(True, [shift])
+        v.auto.keys(True, [code])
+        _advance(ms_per_key // 2)
+        v.auto.keys(False, [code])
+        if shifted:
+            v.auto.keys(False, [shift])
+        _advance(ms_per_key - ms_per_key // 2)
+
+
+@mcp.tool()
+def type_text(text: str, ms_per_key: int = 50) -> str:
+    """Type text on the emulated keyboard (US layout). Use \\n for Enter."""
+    _type(text, ms_per_key)
+    return f"typed {len(text)} chars; {_time_note(vm().auto.status())}"
+
+
+@mcp.tool()
+def mouse(dx: int = 0, dy: int = 0, left: bool = False, right: bool = False, middle: bool = False,
+          hold_ms: int = 30) -> str:
+    """Move the mouse by (dx, dy) and set buttons, run hold_ms, then release the buttons."""
+    v = vm()
+    buttons = (1 if left else 0) | (2 if right else 0) | (4 if middle else 0)
+    v.auto.mouse(dx, dy, buttons)
+    _advance(hold_ms)
+    if buttons:
+        v.auto.mouse(0, 0, 0)
+        _advance(hold_ms)
+    return _time_note(v.auto.status())
+
+
+def _frame() -> PILImage.Image:
+    img = PILImage.open(io.BytesIO(vm().auto.screenshot()["png"]))
+    img.load()
+    return img.convert("RGB")
+
+
+def _changes(a: PILImage.Image, b: PILImage.Image) -> PILImage.Image:
+    from PIL import ImageChops
+
+    return ImageChops.difference(a, b).convert("L").point(lambda v: 255 if v > 24 else 0)
+
+
+def _pointer_from_screen(frame: PILImage.Image, home: PILImage.Image, corner: int, hotspot: str,
+                         noise: PILImage.Image | None = None):
+    """Where the pointer is: the changed region versus the pointer-at-home frame, ignoring the home
+    corner and anything that changes by itself (noise: e.g. a blinking caret)."""
+    from PIL import ImageChops, ImageDraw
+
+    if frame.size != home.size:
+        return None
+    diff = _changes(frame, home)
+    if noise is not None and noise.size == diff.size:
+        diff = ImageChops.subtract(diff, noise)
+    ImageDraw.Draw(diff).rectangle([0, 0, corner, corner], fill=0)
+    if not diff.getbbox():
+        return None
+    # Other things change too (a blinking caret, a clock): take the densest pointer-sized area,
+    # not the bounding box of every change.
+    cell = 16
+    small = diff.resize((max(1, diff.width // cell), max(1, diff.height // cell)), PILImage.Resampling.BOX)
+    w = small.width
+    data = list(small.tobytes())
+    best = max(range(len(data)), key=lambda i: sum(
+        data[j] for j in (i - 1, i, i + 1, i - w, i + w) if 0 <= j < len(data) and abs(j % w - i % w) <= 1))
+    cx, cy = (best % w) * cell, (best // w) * cell
+    box = diff.crop((max(0, cx - 32), max(0, cy - 32), cx + cell + 32, cy + cell + 32)).getbbox()
+    if not box:
+        return None
+    box = (box[0] + max(0, cx - 32), box[1] + max(0, cy - 32), box[2] + max(0, cx - 32), box[3] + max(0, cy - 32))
+    if hotspot == "center":
+        return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+    return box[0], box[1]
+
+
+_mouse_state: dict = {}
+
+
+# Slow moves: at most this many counts per ~10 ms (one PS/2 packet at the default 100 Hz). Guest
+# drivers accelerate fast motion (Windows 3.x doubles it above 2 counts per report), which makes the
+# pointer gain depend on speed; below the threshold the gain is constant and measurable.
+SLOW_COUNTS = 2
+
+
+def _move_counts(dx: int, dy: int, buttons: int, slow: bool = False) -> None:
+    """Relative move, holding the given buttons: packet-sized chunks, or unaccelerated slow chunks."""
+    v = vm()
+    per, wait = (SLOW_COUNTS, 10) if slow else (250, 25)
+    n = max(1, (max(abs(dx), abs(dy)) + per - 1) // per)
+    sent_x = sent_y = 0
+    for i in range(1, n + 1):
+        tx, ty = round(dx * i / n), round(dy * i / n)
+        v.auto.mouse(tx - sent_x, ty - sent_y, buttons)
+        sent_x, sent_y = tx, ty
+        _advance(wait)
+
+
+@mcp.tool()
+def mouse_drag(x1: int, y1: int, x2: int, y2: int, pointer_addr: int | None = None,
+               hotspot: str = "top-left") -> str:
+    """Drag with the left button from (x1, y1) to (x2, y2), e.g. a card, a window or an icon.
+
+    Places the pointer on (x1, y1) with mouse_to, presses, moves to (x2, y2) in a few steps using the
+    pointer gain mouse_to just measured (the pointer can't be tracked while it carries something),
+    then releases. Check the result with a screenshot.
+
+    If drags overshoot or the reported gain varies between calls, the guest is accelerating the
+    pointer: in Windows 3.x set Control Panel > Mouse > Mouse Tracking Speed to Slow first.
+    """
+    v = vm()
+    placed = mouse_to(x1, y1, pointer_addr=pointer_addr, hotspot=hotspot, tolerance=2)
+    if not placed.startswith("at target"):
+        return f"could not grab: {placed}"
+    gx, gy = _mouse_state["gain"]
+    v.auto.mouse(0, 0, 1)
+    _advance(60)
+    # Same slow, unaccelerated motion mouse_to measured its gain with.
+    _move_counts(round((x2 - x1) / gx), round((y2 - y1) / gy), 1, slow=True)
+    _advance(80)
+    v.auto.mouse(0, 0, 0)
+    _advance(100)
+    return f"dragged from ({x1},{y1}) to about ({x2},{y2}); gain {gx:.2f}x{gy:.2f} px/count"
+
+
+@mcp.tool()
+def mouse_to(x: int, y: int, pointer_addr: int | None = None, hotspot: str = "top-left",
+             tolerance: int = 1, max_moves: int = 10) -> str:
+    """Put the pointer at (x, y), closing the loop on where it actually lands.
+
+    Guest mouse drivers scale and accelerate relative motion, so this homes the pointer to the top-left
+    corner, moves, measures, and corrects. Two ways to measure:
+    - pointer_addr: physical address of the program's pointer position, two little-endian int16 (x, y).
+      Exact; x/y are then in the program's own units.
+    - otherwise the screen: the pointer is found by comparing with a frame taken while it sits in the
+      corner, so the rest of the screen must be still (menus, installers, desktops). x/y are native
+      frame pixels (screenshot reports the native size). hotspot: "top-left" for arrow pointers,
+      "center" for crosshairs. Targets within ~32 px of the top-left corner can't be measured this way.
+    """
+    v = vm()
+    corner = 32
+
+    noise = None
+
+    def measure(home):
+        if pointer_addr is not None:
+            raw = v.auto.memr(pointer_addr, 4)
+            return int.from_bytes(raw[:2], "little", signed=True), int.from_bytes(raw[2:], "little", signed=True)
+        return _pointer_from_screen(_frame(), home, corner, hotspot, noise)
+
+    # Home in packet-sized chunks: 86Box hands motion to the guest at most 255 counts per mouse
+    # packet and queues the rest, so one huge move would still be draining (and would swallow the
+    # next moves) long after it was sent.
+    for _ in range(12):
+        v.auto.mouse(-250, -250, 0)
+        _advance(25)
+    _advance(50)
+    home = _frame() if pointer_addr is None else None
+    if home is not None:
+        # Learn what changes on its own (blinking carets, clocks) while the pointer sits still.
+        from PIL import ImageFilter
+
+        _advance(270)
+        noise = _changes(_frame(), home)
+        _advance(270)
+        noise = PILImage.composite(noise, _changes(_frame(), home), noise).filter(ImageFilter.MaxFilter(9))
+    pos = None
+    if pointer_addr is None:
+        # Nudge out of the corner so there is something to measure; how far one count moves the
+        # pointer depends on the guest's driver, so keep pushing until it shows up.
+        nudge = corner * 2
+        for _ in range(5):
+            v.auto.mouse(nudge, nudge, 0)
+            _advance(60)
+            pos = measure(home)
+            if pos is not None:
+                break
+    else:
+        pos = measure(home)
+    gain_x = gain_y = 1.0
+    moves = 0
+    while moves < max_moves:
+        if pos is None:
+            return ("could not find the pointer on screen. Is it visible? Some programs hide it, e.g. dialogs "
+                    "meant for the keyboard; use press_keys there. Animation elsewhere on screen can also hide it.")
+        ex, ey = x - pos[0], y - pos[1]
+        if abs(ex) <= tolerance and abs(ey) <= tolerance:
+            break
+        dx, dy = round(ex / gain_x), round(ey / gain_y)
+        dx = dx or (1 if ex > 0 else -1 if ex < 0 else 0)
+        dy = dy or (1 if ey > 0 else -1 if ey < 0 else 0)
+        _move_counts(dx, dy, 0, slow=True)
+        _advance(40)
+        moves += 1
+        new = measure(home)
+        if new is not None:
+            # Learn how far one count moves the pointer; keep the estimate sane.
+            if dx and new[0] != pos[0]:
+                gain_x = min(max((new[0] - pos[0]) / dx, 0.1), 10.0)
+            if dy and new[1] != pos[1]:
+                gain_y = min(max((new[1] - pos[1]) / dy, 0.1), 10.0)
+        pos = new
+    if pos is None:
+        return "lost the pointer while moving"
+    _mouse_state.update(pos=pos, gain=(gain_x, gain_y))
+    ok = abs(x - pos[0]) <= tolerance and abs(y - pos[1]) <= tolerance
+    return (f"{'at' if ok else 'NOT at'} target: pointer ({pos[0]},{pos[1]}), target ({x},{y}), "
+            f"{moves} corrective moves")
+
+
+@mcp.tool()
+def act(hold_keys: list[str] | None = None, ms: int = 150, mouse_dx: int = 0, mouse_dy: int = 0,
+        mouse_buttons: int = 0, max_width: int = 480) -> list:
+    """Game-loop primitive: hold keys (and mouse) for ms of emulated time, release, return a screenshot.
+
+    With the machine held, the game is frozen between calls, so each call is one turn. Example for DOOM:
+    act(["up","ctrl"], 200) = run forward firing for 0.2 s.
+    """
+    v = vm()
+    codes = [c for combo in (hold_keys or []) for c in K.parse_combo(combo)]
+    v.auto.keys(True, codes)
+    if mouse_dx or mouse_dy or mouse_buttons:
+        v.auto.mouse(mouse_dx, mouse_dy, mouse_buttons)
+    _advance(ms)
+    v.auto.keys(False, list(reversed(codes)))
+    if mouse_buttons:
+        v.auto.mouse(0, 0, 0)
+    png, info = _snapshot(max_width)
+    return [Image(data=png, format="png"), _time_note(info)]
+
+
+# Waiting and DOS -----------------------------------------------------------
+
+
+@mcp.tool()
+def wait_for_text(text: str, timeout_ms: int = 10000) -> str:
+    """Run until text appears on one row of the text-mode screen, or timeout_ms of emulated time passes."""
+    r = vm().auto.wait_text(text, timeout_ms)
+    return ("found" if r.get("matched") else "TIMED OUT") + f"; {_time_note(r)}"
+
+
+_PROMPT = re.compile(r"^[A-Z]:\\[^>]*>$")
+
+
+@mcp.tool()
+def dos_run(command: str, timeout_ms: int = 30000, poll_ms: int = 100) -> str:
+    """Type a DOS command plus Enter, run until the command prompt returns, and return the screen text.
+
+    Gives up after timeout_ms of emulated time (the program may still be running or waiting for input).
+    """
+    v = vm()
+    _type(command + "\n", 40)
+    waited = 0
+    while waited < timeout_ms:
+        _advance(poll_ms)
+        waited += poll_ms
+        scr = v.auto.text() if v.auto.status().get("bios_mode", 0) in (2, 3, 7) else None
+        if scr:
+            row, col = scr.cursor
+            line = scr.lines[row].rstrip() if row < len(scr.lines) else ""
+            if _PROMPT.match(line) and col == len(line):
+                return scr.render()
+    try:
+        screen = v.auto.text().render()
+    except AutomationError as e:
+        screen = f"(no text screen: {e})"
+    return f"TIMED OUT after {timeout_ms} ms emulated; still running or waiting for input.\n{screen}"
+
+
+# Recording -----------------------------------------------------------------
+
+
+@mcp.tool()
+def record_start(directory: str, interval_ms: int = 100) -> str:
+    """Record the screen: 86Box saves the displayed frame every interval_ms of emulated time into
+    directory (one PNG per frame, named by emulated ms), whatever advances the clock.
+
+    Use record_stop to finish; it can render a video.
+    """
+    d = Path(directory).expanduser().resolve()
+    d.mkdir(parents=True, exist_ok=True)
+    r = vm().auto.call(f"record start {int(interval_ms)} {d}")
+    _record_dirs.append(d)
+    return f"recording every {interval_ms} ms of emulated time to {d}; {_time_note(r)}"
+
+
+@mcp.tool()
+def record_stop(video: str | None = None, calls_log: str | None = None, fast_factor: int = 8) -> str:
+    """Stop recording. With video (.mp4 or .gif), render it: real speed around interactions, idle
+    stretches fast-forwarded fast_factor times. calls_log is an optional JSONL of
+    {"start_ms", "end_ms", "caption"} for captions (mcpctl writes one).
+    """
+    v = vm()
+    r = v.auto.call("record stop")
+    msg = f"stopped recording; {r.get('frames')} frames"
+    if video:
+        from .ctl import render_timeline
+
+        frames = _last_record_dir()
+        render_timeline(frames, Path(video).expanduser(), Path(calls_log).expanduser() if calls_log else None,
+                        fast_factor=fast_factor)
+        msg += f"; rendered {video}"
+    return msg
+
+
+_record_dirs: list[Path] = []
+
+
+def _last_record_dir() -> Path:
+    if not _record_dirs:
+        raise ValueError("no recording made in this session")
+    return _record_dirs[-1]
+
+
+# Serial --------------------------------------------------------------------
+
+
+@mcp.tool()
+def serial_read(port: int = 1, from_start: bool = False) -> str:
+    """Output the guest has written to a COM port since the last serial_read (from_start: since boot).
+
+    COM1 is captured when the VM was started with vm_start(com1_log=True). In DOS,
+    `ECHO hello > COM1` or a program writing to the port shows up here; it is the easiest way to get
+    debug logs out of your own programs.
+    """
+    text = vm().serial_read(port, from_start)
+    return text if text else "(no new output)"
+
+
+@mcp.tool()
+def wait_for_serial(text: str, port: int = 1, timeout_ms: int = 10000, poll_ms: int = 20) -> str:
+    """Run until `text` appears in new COM port output, or timeout_ms of emulated time passes.
+
+    Returns the output seen while waiting, so a log line can be waited for and read in one call.
+    """
+    v = vm()
+    seen = ""
+    waited = 0
+    while True:
+        seen += v.serial_read(port)
+        if text in seen:
+            return f"found after {waited} ms\n{seen}"
+        if waited >= timeout_ms:
+            return f"TIMED OUT after {timeout_ms} ms\n{seen or '(no output)'}"
+        _advance(poll_ms)
+        waited += poll_ms
+
+
+# Files ---------------------------------------------------------------------
+
+
+@mcp.tool()
+def dos_put_floppy(paths: list[str], drive: str = "A") -> str:
+    """Copy host files/directories onto a fresh 1.44 MB floppy image and insert it in drive A: or B:."""
+    v = vm()
+    img = v.make_floppy(paths)
+    v.load_floppy(img, 0 if drive.upper().startswith("A") else 1)
+    names = ", ".join(Path(p).name for p in paths)
+    return f"inserted floppy with {names} in {drive.upper()[0]}:"
+
+
+@mcp.tool()
+def floppy_insert(image: str, drive: str = "A", write_protect: bool = False) -> str:
+    """Insert an existing floppy image (.img/.ima/.86f, ...) in drive A: or B:. Works for any guest.
+
+    Images outside $HOME and /tmp are copied first. With write_protect=False the guest can write to the
+    image file itself.
+    """
+    v = vm()
+    path = Path(image).expanduser().resolve()
+    if not any(path.is_relative_to(p) for p in (Path.home(), Path("/tmp"))):
+        copy = v.run_dir / path.name
+        shutil.copy(path, copy)
+        path = copy
+    index = 0 if drive.upper().startswith("A") else 1
+    v.load_floppy(("wp://" if write_protect else "") + str(path), index)  # str: Path would collapse "//"
+    mounted = [f["file"] for f in v.auto.info()["floppy"] if f["drive"] == index]
+    if not mounted:
+        raise AutomationError(f"86Box did not mount {path} in {drive.upper()[0]}:")
+    return f"inserted {path.name} in {drive.upper()[0]}:"
+
+
+@mcp.tool()
+def floppy_eject(drive: str = "A") -> str:
+    """Eject the floppy from drive A: or B:."""
+    vm().auto.call(f"fdd eject {0 if drive.upper().startswith('A') else 1}")
+    return f"ejected {drive.upper()[0]}:"
+
+
+@mcp.tool()
+def cdrom_insert(image: str | None = None, files: list[str] | None = None, drive: int = 0) -> str:
+    """Insert a CD in the emulated CD-ROM drive: an existing image (.iso/.cue) or a new ISO built
+    from host files and directories (ISO 9660 8.3 names plus Joliet long names).
+
+    Works for any guest; DOS needs a CD-ROM driver and MSCDEX (or SHSUCDX) to read it. VMs made by
+    vm_create/dos_create_vm have an ATAPI CD-ROM drive as primary slave (this board's BIOS leaves the
+    secondary IDE channel off). The first read after a disc change may report "drive not ready"; retry.
+    """
+    v = vm()
+    if (image is None) == (files is None):
+        raise ValueError("pass exactly one of image or files")
+    path = Path(image) if image else v.make_iso(files)
+    v.load_cdrom(path, drive)
+    mounted = [c["file"] for c in v.auto.info()["cdrom"] if c["drive"] == drive]
+    if not mounted:
+        raise AutomationError(f"86Box did not mount {path}; is there a CD-ROM drive {drive}? See vm_info.")
+    return f"inserted {mounted[0]} in CD-ROM drive {drive}"
+
+
+@mcp.tool()
+def cdrom_eject(drive: int = 0) -> str:
+    """Eject the CD from an emulated CD-ROM drive."""
+    vm().auto.call(f"cd eject {drive}")
+    return f"ejected CD-ROM drive {drive}"
+
+
+# Memory and CPU ------------------------------------------------------------
+
+
+@mcp.tool()
+def read_memory(addr: int, length: int = 256) -> str:
+    """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes."""
+    data = vm().auto.memr(addr, length)
+    lines = []
+    for off in range(0, len(data), 16):
+        chunk = data[off:off + 16]
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{addr + off:08x}  {chunk.hex(' '):<47}  {asc}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def write_memory(addr: int, hex_bytes: str) -> str:
+    """Write bytes (hex string, e.g. "90 90 cc") to physical memory."""
+    data = bytes.fromhex(hex_bytes)
+    vm().auto.memw(addr, data)
+    return f"wrote {len(data)} bytes at {addr:#x}"
+
+
+@mcp.tool()
+def wait_for_memory(addr: int, hex_bytes: str, timeout_ms: int = 10000) -> str:
+    """Run until physical memory at addr equals hex_bytes, or timeout_ms of emulated time passes."""
+    r = vm().auto.wait_mem(addr, bytes.fromhex(hex_bytes), timeout_ms)
+    return ("matched" if r.get("matched") else "TIMED OUT") + f"; {_time_note(r)}"
+
+
+@mcp.tool()
+def registers() -> dict:
+    """CPU registers at the current instruction boundary (sampled between 1 ms quanta)."""
+    return vm().auto.regs()
+
+
+def main() -> None:
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "86box": {
+      "command": "server/.venv/bin/box86mcp"
+    }
+  }
+}

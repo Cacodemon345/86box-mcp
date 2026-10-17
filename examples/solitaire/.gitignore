@@ -1,0 +1,4 @@
+lib/deal*.png
+lib/sheet.*
+__pycache__/
+lib/unlabeled/*
