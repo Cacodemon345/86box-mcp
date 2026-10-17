@@ -159,6 +159,30 @@ it:
 
 ![The skier crashes, gets up and outruns the Abominable Snowman](docs/images/skifree-yeti-outrun.gif)
 
+### Arkanoid II: 386,920 points
+
+![Arkanoid II round 7, the bot keeping the ball in play](docs/images/arkanoid-round7.gif)
+
+[`examples/arkanoid`](examples/arkanoid) plays the 1989 DOS version of
+*Arkanoid II: Revenge of DoH* on MS-DOS 6.22. Every frame (about 14 ms), the
+bot reads the paddle, the balls, the falling capsules and the score from guest
+memory, then steers with the keyboard while time is held. Its best game scored
+386,920 and reached round 10:
+- **Prediction:** it works out where each falling ball will meet the paddle,
+  bouncing off the walls, and gets there early. The paddle is only about as
+  fast as the ball.
+- **Aiming:** where the ball hits the paddle sets its new angle. The bot cycles
+  through eight hit positions, so successive bounces sweep the field and reach
+  the last bricks.
+- **Capsules:** these are worth 1,000 points each. The bot catches them while
+  the ball is heading up, which roughly quadrupled its scoring rate.
+
+Two lessons from getting it going:
+- **The demo:** after a game ends, the game's attract-mode demo takes over and
+  plays itself, which is easy to mistake for the bot playing.
+- **The keys:** the game only reads the keypad keys, not the extended arrow
+  keys.
+
 ## Quickstart
 
 Needs Linux and Python 3.11+. Get the code, and 86Box from our fork:
