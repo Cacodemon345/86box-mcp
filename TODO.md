@@ -24,6 +24,6 @@
 
 ## Examples
 
-- **Arkanoid II with more than three balls.** The bot treats only the first
-  three object slots as balls. Check that against the screen during a
-  multi-ball, or disassemble the game to find the ball-active flag.
+- **Arkanoid II bot:** see the to-do list in
+  [examples/arkanoid/README.md](examples/arkanoid/README.md#to-do) (brick
+  map, capsule letters, lives, ball slots).

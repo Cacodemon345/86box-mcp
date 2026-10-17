@@ -54,3 +54,24 @@ paddle at y ≈ 180, and a centred hit is ball x − paddle x ≈ 14.
 
 Load `arkbot.py` into a `skictl` session (`examples/skifree/skictl.py`) booted
 with `--vm <dir> --dos`, then use `start_game()` and `play_full(ms)`.
+
+## To do
+
+What would raise the score most, roughly in order:
+
+- **Disassemble the game.** It's the quickest way to get the items below for
+  certain, rather than guessing from memory diffs.
+- **Find the brick map,** and aim at the remaining bricks instead of sweeping
+  angles. Last bricks are where rounds stall: one silver brick took 95 seconds.
+  The 13-wide grid near `0x23261` turned out not to be it.
+- **Read capsule letters** and skip the bad ones. Some misses happened with the
+  paddle in position, which looks like a shrunken paddle from the R capsule;
+  the bot catches every capsule. Catch (C) could also be used to hold the ball
+  and aim precisely.
+- **Find the lives counter.** `0x2CA6A` isn't reliable, so losses are spotted
+  indirectly, from no ball moving for a while.
+- **Find the real score variable.** `0x233DD` is a display buffer.
+- **Confirm the ball slots** during a multi-ball. The bot reads only the first
+  three object records; more balls may use later ones.
+- **Handle fast deflections near the paddle,** for example by staying under
+  balls that could come down quickly, not only the predicted one.
