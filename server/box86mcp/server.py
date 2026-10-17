@@ -15,7 +15,7 @@ from PIL import Image as PILImage
 from . import disk
 from . import keys as K
 from .protocol import AutomationError
-from .vm import PRIMED_NVR, VM, write_config
+from .vm import VM, machine_of, prime_nvr, write_config
 
 mcp = MCPServer(
     "86box",
@@ -66,20 +66,18 @@ def _time_note(info: dict) -> str:
 # Lifecycle -----------------------------------------------------------------
 
 
-def _prime_nvr(d: Path, nvr_dir: str | None) -> None:
-    """Copy a saved CMOS into the VM so the BIOS boots without stopping at setup (default: bundled)."""
-    nvr = Path(nvr_dir).expanduser() if nvr_dir else PRIMED_NVR
-    if nvr.is_dir():
-        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
 
 
 @mcp.tool()
 def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int = 63,
-              nvr_dir: str | None = None) -> str:
-    """Create a 486DX2-66 VM in vm_dir with a blank hard disk, ready for installing an OS from floppy or CD.
+              config: str | None = None, nvr: str | None = None) -> str:
+    """Create a VM in vm_dir with a blank hard disk, ready for installing an OS from floppy or CD.
 
-    The default geometry, 993/16/63, matches a 512 MB CompactFlash card. Boot media: floppy_insert or
-    cdrom_insert, then vm_start.
+    The machine is a 486DX2-66 with 16 MB, unless config names an 86box.cfg to copy: then that
+    machine, with its first hard disk replaced by the new blank one. nvr is a saved CMOS (.nvr file,
+    or a folder of them) so the BIOS boots without stopping at setup; by default the bundled one is
+    used when the machine is the default 486DX2-66. The default geometry, 993/16/63, matches a 512 MB
+    CompactFlash card. Boot media: floppy_insert or cdrom_insert, then vm_start.
     """
     d = Path(vm_dir).expanduser()
     if (d / "86box.cfg").exists():
@@ -87,17 +85,20 @@ def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int =
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "hdd.img", "wb") as f:
         f.truncate(cylinders * heads * sectors * 512)
-    write_config(d, cylinders, heads, sectors)
-    _prime_nvr(d, nvr_dir)
+    write_config(d, cylinders, heads, sectors, template=config)
+    cmos = prime_nvr(d, nvr)
     mb = cylinders * heads * sectors * 512 // (1024 * 1024)
-    return f"created {d} with a blank {mb} MB disk ({cylinders}/{heads}/{sectors})"
+    return f"created {d} ({machine_of(d)}) with a blank {mb} MB disk ({cylinders}/{heads}/{sectors}); {cmos}"
 
 
 @mcp.tool()
 def dos_create_vm(vm_dir: str, base_image: str | None = None, cylinders: int = 993,
                   heads: int = 16, sectors: int = 63, autoexec: str = "@ECHO OFF\nPROMPT $P$G\n",
-                  nvr_dir: str | None = None) -> str:
-    """Create a new 486DX2-66 VM in vm_dir with a fresh bootable DOS hard disk.
+                  config: str | None = None, nvr: str | None = None) -> str:
+    """Create a new VM in vm_dir with a fresh bootable DOS hard disk.
+
+    The machine is a 486DX2-66 with 16 MB, unless config names an 86box.cfg to copy (its first hard
+    disk becomes the new DOS disk). nvr: a saved CMOS file or folder, as for vm_create.
 
     The default geometry, 993/16/63, matches a 512 MB CompactFlash card. The disk uses 86Box's RAM-disk
     speed (no seek or rotation delays). DOS system files are taken from base_image, a bootable DOS hard
@@ -113,10 +114,10 @@ def dos_create_vm(vm_dir: str, base_image: str | None = None, cylinders: int = 9
     img = d / "hdd.img"
     disk.make_dos_disk(img, Path(base_image).expanduser(), (cylinders, heads, sectors))
     disk.write_text(img, "AUTOEXEC.BAT", autoexec)
-    write_config(d, cylinders, heads, sectors)
-    _prime_nvr(d, nvr_dir)
+    write_config(d, cylinders, heads, sectors, template=config)
+    cmos = prime_nvr(d, nvr)
     mb = cylinders * heads * sectors * 512 // (1024 * 1024)
-    return f"created {d} with a {mb} MB DOS disk ({cylinders}/{heads}/{sectors})"
+    return f"created {d} ({machine_of(d)}) with a {mb} MB DOS disk ({cylinders}/{heads}/{sectors}); {cmos}"
 
 
 @mcp.tool()
@@ -709,9 +710,35 @@ def cdrom_eject(drive: int = 0) -> str:
 # Memory and CPU ------------------------------------------------------------
 
 
+CHUNK = 65536  # the automation socket's largest memr
+
+
+def _check_range(addr: int, length: int) -> int:
+    """Refuse addresses outside the emulated RAM; returns the RAM size in bytes."""
+    size = vm().mem_bytes()
+    if addr < 0 or length < 0 or addr + length > size:
+        raise ValueError(f"{addr:#x}+{length} is outside the emulated RAM (0..{size:#x}, "
+                         f"{size // 1024} KB; see vm_info)")
+    return size
+
+
+def _read_range(start: int, end: int) -> bytes:
+    v = vm()
+    return b"".join(v.auto.memr(a, min(CHUNK, end - a)) for a in range(start, end, CHUNK))
+
+
+def _span(start: int, end: int | None) -> tuple[int, int]:
+    size = vm().mem_bytes()
+    end = size if end is None else end
+    _check_range(start, end - start)
+    return start, end
+
+
 @mcp.tool()
 def read_memory(addr: int, length: int = 256) -> str:
-    """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes."""
+    """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes, within the
+    emulated RAM (vm_info reports mem_kb)."""
+    _check_range(addr, length)
     data = vm().auto.memr(addr, length)
     lines = []
     for off in range(0, len(data), 16):
@@ -723,8 +750,9 @@ def read_memory(addr: int, length: int = 256) -> str:
 
 @mcp.tool()
 def write_memory(addr: int, hex_bytes: str) -> str:
-    """Write bytes (hex string, e.g. "90 90 cc") to physical memory."""
+    """Write bytes (hex string, e.g. "90 90 cc") to physical memory, within the emulated RAM."""
     data = bytes.fromhex(hex_bytes)
+    _check_range(addr, len(data))
     vm().auto.memw(addr, data)
     return f"wrote {len(data)} bytes at {addr:#x}"
 
@@ -732,8 +760,114 @@ def write_memory(addr: int, hex_bytes: str) -> str:
 @mcp.tool()
 def wait_for_memory(addr: int, hex_bytes: str, timeout_ms: int = 10000) -> str:
     """Run until physical memory at addr equals hex_bytes, or timeout_ms of emulated time passes."""
-    r = vm().auto.wait_mem(addr, bytes.fromhex(hex_bytes), timeout_ms)
+    data = bytes.fromhex(hex_bytes)
+    _check_range(addr, len(data))
+    r = vm().auto.wait_mem(addr, data, timeout_ms)
     return ("matched" if r.get("matched") else "TIMED OUT") + f"; {_time_note(r)}"
+
+
+def _pattern(hex_bytes: str | None, text: str | None, value: int | None, size: int, signed: bool) -> bytes:
+    given = [x is not None for x in (hex_bytes, text, value)]
+    if sum(given) != 1:
+        raise ValueError("give exactly one of hex_bytes, text or value")
+    if hex_bytes is not None:
+        return bytes.fromhex(hex_bytes)
+    if text is not None:
+        return text.encode("latin-1")
+    if size not in (1, 2, 4):
+        raise ValueError("size must be 1, 2 or 4")
+    return value.to_bytes(size, "little", signed=signed)
+
+
+@mcp.tool()
+def find_memory(hex_bytes: str | None = None, text: str | None = None, value: int | None = None,
+                size: int = 2, signed: bool = False, start: int = 0, end: int | None = None,
+                max_results: int = 50) -> str:
+    """Search physical memory for bytes (hex), text, or a little-endian number of `size` bytes.
+
+    Searches start..end, by default the whole emulated RAM. For a real-mode DOS program, the first
+    640 KB (end=0xA0000) is enough; DOS-extended programs and Windows use memory above 1 MB too.
+    The BIOS's own count of conventional memory, in KB, is the word at 0x413.
+    Lists the addresses where it occurs, at any alignment.
+    """
+    pat = _pattern(hex_bytes, text, value, size, signed)
+    start, end = _span(start, end)
+    data = _read_range(start, end)
+    hits, i = [], data.find(pat)
+    while i >= 0 and len(hits) < max_results:
+        hits.append(start + i)
+        i = data.find(pat, i + 1)
+    more = " (more not shown)" if i >= 0 else ""
+    return f"{len(hits)} found{more} in {start:#x}..{end:#x}: " + " ".join(f"{a:#x}" for a in hits)
+
+
+_snapshots: dict[str, dict] = {}
+
+
+@mcp.tool()
+def snapshot_memory(name: str = "default", start: int = 0, end: int | None = None) -> str:
+    """Remember the contents of start..end (default: all emulated RAM), for diff_memory.
+
+    The way to find a variable: snapshot, make the game change it (move, score, lose a life), then
+    diff_memory with the kind of change you expect. Each diff keeps only the addresses that matched,
+    so repeat until a few are left.
+    """
+    start, end = _span(start, end)
+    _snapshots[name] = {"start": start, "end": end, "data": _read_range(start, end), "candidates": None}
+    return f"snapshot {name!r}: {end - start} bytes from {start:#x}"
+
+
+def _num(buf: bytes, off: int, size: int, signed: bool) -> int:
+    return int.from_bytes(buf[off:off + size], "little", signed=signed)
+
+
+@mcp.tool()
+def diff_memory(change: str = "changed", name: str = "default", size: int = 1, signed: bool = False,
+                value: int | None = None, max_results: int = 50) -> str:
+    """Compare memory with snapshot `name` and keep only the addresses that changed as described.
+
+    change: "changed", "unchanged", "increased", "decreased", or "equals" (now equal to value).
+    size: 1, 2 or 4 bytes, read little-endian, signed or not. The first diff after a snapshot looks
+    at every address; later ones only at the survivors, and the snapshot then moves to the present.
+    """
+    if change not in ("changed", "unchanged", "increased", "decreased", "equals"):
+        raise ValueError("change must be changed, unchanged, increased, decreased or equals")
+    if change == "equals" and value is None:
+        raise ValueError("change='equals' needs value")
+    if size not in (1, 2, 4):
+        raise ValueError("size must be 1, 2 or 4")
+    snap = _snapshots.get(name)
+    if snap is None:
+        raise ValueError(f"no snapshot {name!r}; call snapshot_memory first")
+    start, end, old = snap["start"], snap["end"], snap["data"]
+    new = _read_range(start, end)
+
+    def keep(off: int) -> bool:
+        if off + size > len(new):
+            return False
+        a, b = _num(old, off, size, signed), _num(new, off, size, signed)
+        return {"changed": a != b, "unchanged": a == b, "increased": b > a, "decreased": b < a,
+                "equals": b == value}[change]
+
+    if snap["candidates"] is not None:
+        survivors = [off for off in snap["candidates"] if keep(off)]
+    elif change in ("unchanged", "equals"):
+        survivors = [off for off in range(len(new) - size + 1) if keep(off)]
+    else:
+        # Only bytes that differ can start a changed value: look near them, chunk by chunk.
+        survivors = []
+        for c in range(0, len(new), 4096):
+            if old[c:c + 4096] == new[c:c + 4096]:
+                continue
+            for off in range(max(0, c - size + 1), min(len(new), c + 4096)):
+                if (not survivors or survivors[-1] < off) and keep(off):
+                    survivors.append(off)
+    snap["candidates"], snap["data"] = survivors, new
+    shown = survivors[:max_results]
+    def fmt(off):
+        return f"{start + off:#x}={_num(new, off, size, signed)}"
+    more = f" (showing {len(shown)})" if len(survivors) > len(shown) else ""
+    return f"{len(survivors)} addresses {change}{more}: " + " ".join(fmt(o) for o in shown)
 
 
 @mcp.tool()

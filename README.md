@@ -285,19 +285,20 @@ These work with any guest OS:
 
 | Tool | What it does |
 |---|---|
-| `vm_create`, `vm_start`, `vm_stop`, `vm_status`, `vm_info` | New VM with a blank disk (512 MB CompactFlash geometry by default); boot (held by default; `window=True` to watch); power off; status; machine, media, speed and reset counts (a triple fault shows up there) |
+| `vm_create`, `vm_start`, `vm_stop`, `vm_status`, `vm_info` | New VM with a blank disk (512 MB CompactFlash geometry by default), as a 486DX2-66 or a copy of any `86box.cfg` you pass as `config`, with an optional saved CMOS (`nvr`); boot (held by default; `window=True` to watch); power off; status; machine, CPU, RAM, media, speed and reset counts (a triple fault shows up there) |
 | `hold`, `release`, `step(ms)` | Freeze time, run in real time, or run exactly *ms* of emulated time |
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
 | `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion; put the pointer at a screen position (closing the loop on where it lands); drag |
 | `screenshot`, `screen_text`, `wait_for_text` | The frame; text-mode screen as text; run until text appears |
-| `read_memory`, `write_memory`, `wait_for_memory`, `registers` | Physical memory and CPU registers |
+| `read_memory`, `write_memory`, `wait_for_memory`, `registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`), and CPU registers |
+| `find_memory`, `snapshot_memory`, `diff_memory` | Search memory for bytes, text or a number; snapshot it, then keep only the addresses that changed the way you expect (increased, decreased, equal to a value) to find a game's variables |
 | `serial_read`, `wait_for_serial` | Guest output on COM1 |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |
 | `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time; hard reset or Ctrl+Alt+Del |
 
 DOS helpers assume DOS and FAT disks: `dos_create_vm` (VM with a bootable DOS
-disk), `dos_install_files` (copy files of any size onto C: while stopped),
+disk; takes `config` and `nvr` like `vm_create`), `dos_install_files` (copy files of any size onto C: while stopped),
 `dos_put_floppy` (hot-insert a floppy with some files) and `dos_run` (type a
 command and wait for the prompt).
 

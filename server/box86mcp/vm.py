@@ -94,11 +94,58 @@ bios = cl_gd5428_vlb
 
 
 def write_config(vm_dir: str | os.PathLike, cyls: int, heads: int, spt: int, hdd_fn: str = "hdd.img",
-                 speed: str = "ramdisk") -> Path:
-    """Write an 86box.cfg for the DX2-66 machine with one IDE disk."""
+                 speed: str = "ramdisk", template: str | os.PathLike | None = None) -> Path:
+    """Write the VM's 86box.cfg: the DX2-66 machine with one IDE disk, or a copy of template.
+
+    With a template, everything is kept except the first hard disk, which becomes hdd_fn with the
+    given geometry (on the template's bus and channel if it has one, else IDE 0:0).
+    """
     cfg = Path(vm_dir) / "86box.cfg"
-    cfg.write_text(DX2_66_CFG.format(hdd_fn=hdd_fn, cyls=cyls, heads=heads, spt=spt, speed=speed))
+    if template is None:
+        cfg.write_text(DX2_66_CFG.format(hdd_fn=hdd_fn, cyls=cyls, heads=heads, spt=spt, speed=speed))
+        return cfg
+    lines = Path(template).expanduser().read_text().splitlines()
+    old = _ini_get(lines, "Hard disks", "hdd_01_parameters")
+    bus = old.split(",")[4].strip() if old and len(old.split(",")) >= 5 else "ide"
+    lines = _ini_set(lines, "Hard disks", "hdd_01_fn", hdd_fn)
+    lines = _ini_set(lines, "Hard disks", "hdd_01_parameters", f"{spt}, {heads}, {cyls}, 0, {bus}")
+    if _ini_get(lines, "Hard disks", f"hdd_01_{bus}_channel") is None and bus == "ide":
+        lines = _ini_set(lines, "Hard disks", "hdd_01_ide_channel", "0:0")
+    if _ini_get(lines, "Hard disks", "hdd_01_speed") is None:
+        lines = _ini_set(lines, "Hard disks", "hdd_01_speed", speed)
+    cfg.write_text("\n".join(lines) + "\n")
     return cfg
+
+
+def machine_of(vm_dir: str | os.PathLike) -> str | None:
+    """The machine's internal name from the VM's 86box.cfg (86Box names CMOS files after it)."""
+    cfg = Path(vm_dir) / "86box.cfg"
+    return _ini_get(cfg.read_text().splitlines(), "Machine", "machine") if cfg.exists() else None
+
+
+def prime_nvr(vm_dir: str | os.PathLike, nvr: str | os.PathLike | None = None) -> str:
+    """Put a saved CMOS into the VM, so the BIOS boots without stopping at setup.
+
+    nvr may be a .nvr file (copied as nvr/<machine>.nvr, the name 86Box looks for) or a folder of
+    them. Without one, the bundled CMOS is used, but only for the machine it was saved from.
+    """
+    d = Path(vm_dir)
+    machine = machine_of(d)
+    if nvr is None:
+        bundled = PRIMED_NVR / f"{machine}.nvr"
+        if not bundled.is_file():
+            return f"no CMOS file for machine {machine!r}; the BIOS may stop at setup on first boot"
+        src = bundled
+    else:
+        src = Path(nvr).expanduser()
+        if src.is_dir():
+            shutil.copytree(src, d / "nvr", dirs_exist_ok=True)
+            return f"CMOS from {src}"
+        if not src.is_file():
+            raise FileNotFoundError(f"CMOS file {src} not found")
+    (d / "nvr").mkdir(exist_ok=True)
+    shutil.copyfile(src, d / "nvr" / f"{machine}.nvr")
+    return f"CMOS from {src}" + (f" (as {machine}.nvr)" if src.name != f"{machine}.nvr" else "")
 
 
 def _ini_set(lines: list[str], section: str, key: str, value: str) -> list[str]:
@@ -230,6 +277,7 @@ class VM:
         # Through guard.py, which stops 86Box if this process dies without calling stop(): it holds
         # the read end of the stdin pipe, and only we hold the write end.
         guard = [sys.executable, str(Path(__file__).with_name("guard.py"))]
+        self._mem_bytes = None
         self.proc = subprocess.Popen(guard + args, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
                                      env=env, start_new_session=True)
         log.close()
@@ -275,6 +323,12 @@ class VM:
                 shutil.rmtree(f, ignore_errors=True)
             else:
                 f.unlink(missing_ok=True)
+
+    def mem_bytes(self) -> int:
+        """Emulated RAM in bytes, from 86Box's own report (cached; RAM can't change while it runs)."""
+        if getattr(self, "_mem_bytes", None) is None:
+            self._mem_bytes = int(self.auto.info()["mem_kb"]) * 1024
+        return self._mem_bytes
 
     def hdd_image(self) -> Path:
         """Path of the primary hard disk image named in 86box.cfg."""

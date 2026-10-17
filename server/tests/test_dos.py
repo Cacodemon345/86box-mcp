@@ -209,3 +209,56 @@ def test_attach_over_tcp_with_inline_screenshots(tmp_path, monkeypatch):
         vm.auto.connect()
     finally:
         vm.stop()
+
+
+def test_memory_tools_bounds_find_and_diff(dos_vm):
+    import pytest
+
+    from box86mcp import server
+
+    server._vm = dos_vm
+    try:
+        dos_vm.auto.step(3000)
+        size = dos_vm.mem_bytes()
+        assert size == 16384 * 1024
+        with pytest.raises(ValueError):
+            server.read_memory(size - 8, 16)
+        with pytest.raises(ValueError):
+            server.write_memory(size, "00")
+        # The BIOS keeps the conventional memory size, in KB, at 0x413: 639 here, as it reserves the
+        # top 1 KB for its extended data area.
+        assert "0x413" in server.find_memory(value=639, size=2, start=0x400, end=0x500)
+        # Snapshot, change a word, and narrow down to it.
+        addr = 0x7F000
+        server.write_memory(addr, "10 00")
+        server.snapshot_memory("t", start=0x70000, end=0x80000)
+        server.write_memory(addr, "20 00")
+        out = server.diff_memory("increased", name="t", size=2)
+        assert f"{addr:#x}=32" in out
+        server.write_memory(addr, "05 00")
+        out = server.diff_memory("decreased", name="t", size=2)
+        # Every alignment is searched, so the word straddling the low byte survives too.
+        assert f"{addr:#x}=5" in out and int(out.split()[0]) <= 2
+    finally:
+        server._vm = None
+
+
+def test_vm_create_from_template(tmp_path):
+    from conftest import make_dos_vm
+
+    from box86mcp import server
+    from box86mcp.vm import machine_of
+
+    tpl = make_dos_vm(tmp_path / "tpl")
+    cfg = (tpl / "86box.cfg").read_text().replace("mem_size = 16384", "mem_size = 8192")
+    (tmp_path / "custom.cfg").write_text(cfg)
+    nvr = tmp_path / "saved.nvr"
+    nvr.write_bytes(bytes(256))
+    out = server.vm_create(str(tmp_path / "new"), cylinders=100, heads=16, sectors=63,
+                           config=str(tmp_path / "custom.cfg"), nvr=str(nvr))
+    new = tmp_path / "new"
+    text = (new / "86box.cfg").read_text()
+    assert "mem_size = 8192" in text and "hdd_01_parameters = 63, 16, 100, 0, ide" in text
+    assert "hdd_01_fn = hdd.img" in text
+    assert (new / "nvr" / f"{machine_of(new)}.nvr").read_bytes() == bytes(256)
+    assert "as 486sp3c.nvr" in out
