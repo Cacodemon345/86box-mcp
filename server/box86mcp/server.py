@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import shutil
 import time
@@ -14,7 +15,7 @@ from PIL import Image as PILImage
 from . import disk
 from . import keys as K
 from .protocol import AutomationError
-from .vm import VM, write_config
+from .vm import PRIMED_NVR, VM, write_config
 
 mcp = MCPServer(
     "86box",
@@ -65,9 +66,16 @@ def _time_note(info: dict) -> str:
 # Lifecycle -----------------------------------------------------------------
 
 
+def _prime_nvr(d: Path, nvr_dir: str | None) -> None:
+    """Copy a saved CMOS into the VM so the BIOS boots without stopping at setup (default: bundled)."""
+    nvr = Path(nvr_dir).expanduser() if nvr_dir else PRIMED_NVR
+    if nvr.is_dir():
+        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
+
+
 @mcp.tool()
 def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int = 63,
-              nvr_dir: str = "~/tools/86box/primed-nvr/dx2-66-vlb") -> str:
+              nvr_dir: str | None = None) -> str:
     """Create a 486DX2-66 VM in vm_dir with a blank hard disk, ready for installing an OS from floppy or CD.
 
     The default geometry, 993/16/63, matches a 512 MB CompactFlash card. Boot media: floppy_insert or
@@ -80,22 +88,24 @@ def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int =
     with open(d / "hdd.img", "wb") as f:
         f.truncate(cylinders * heads * sectors * 512)
     write_config(d, cylinders, heads, sectors)
-    nvr = Path(nvr_dir).expanduser()
-    if nvr.is_dir():
-        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
+    _prime_nvr(d, nvr_dir)
     mb = cylinders * heads * sectors * 512 // (1024 * 1024)
     return f"created {d} with a blank {mb} MB disk ({cylinders}/{heads}/{sectors})"
 
 
 @mcp.tool()
-def dos_create_vm(vm_dir: str, base_image: str = "~/tools/86box/vms/dos622-base.img", cylinders: int = 993,
+def dos_create_vm(vm_dir: str, base_image: str | None = None, cylinders: int = 993,
                   heads: int = 16, sectors: int = 63, autoexec: str = "@ECHO OFF\nPROMPT $P$G\n",
-                  nvr_dir: str = "~/tools/86box/primed-nvr/dx2-66-vlb") -> str:
+                  nvr_dir: str | None = None) -> str:
     """Create a new 486DX2-66 VM in vm_dir with a fresh bootable DOS hard disk.
 
     The default geometry, 993/16/63, matches a 512 MB CompactFlash card. The disk uses 86Box's RAM-disk
-    speed (no seek or rotation delays). DOS system files are taken from base_image.
+    speed (no seek or rotation delays). DOS system files are taken from base_image, a bootable DOS hard
+    disk image (default: $BOX86_DOS_BASE_IMG).
     """
+    base_image = base_image or os.environ.get("BOX86_DOS_BASE_IMG")
+    if not base_image:
+        raise ValueError("pass base_image (a bootable DOS hard disk image) or set BOX86_DOS_BASE_IMG")
     d = Path(vm_dir).expanduser()
     if (d / "86box.cfg").exists():
         raise FileExistsError(f"{d} already has an 86box.cfg")
@@ -104,9 +114,7 @@ def dos_create_vm(vm_dir: str, base_image: str = "~/tools/86box/vms/dos622-base.
     disk.make_dos_disk(img, Path(base_image).expanduser(), (cylinders, heads, sectors))
     disk.write_text(img, "AUTOEXEC.BAT", autoexec)
     write_config(d, cylinders, heads, sectors)
-    nvr = Path(nvr_dir).expanduser()
-    if nvr.is_dir():
-        shutil.copytree(nvr, d / "nvr", dirs_exist_ok=True)
+    _prime_nvr(d, nvr_dir)
     mb = cylinders * heads * sectors * 512 // (1024 * 1024)
     return f"created {d} with a {mb} MB DOS disk ({cylinders}/{heads}/{sectors})"
 

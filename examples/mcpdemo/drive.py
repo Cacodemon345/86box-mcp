@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import shutil
 import struct
 import sys
@@ -333,7 +334,8 @@ async def main() -> int:
     if not (HERE / "dist" / "MCPDEMO.EXE").exists():
         print("build first: examples/mcpdemo/build.sh")
         return 1
-    params = StdioServerParameters(command=str(SERVER))
+    # Pass our environment on, so BOX86_* settings reach the server.
+    params = StdioServerParameters(command=str(SERVER), env=dict(os.environ))
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()

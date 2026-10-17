@@ -20,7 +20,7 @@ from C: on a VM whose disk matches a 512 MB CompactFlash card.
   `wait_for_memory(addr + 0x3C, "0000")`).
 
 ```sh
-./build.sh                                  # needs ~/djgpp, CWSDPMI and CTMOUSE in ~/tools/dl
+CWSDPMI=/path/CWSDPMI.EXE CTMOUSE=/path/CTMOUSE.EXE ./build.sh   # DJGPP in ~/djgpp, or set DJGPP_DIR
 ../../server/.venv/bin/python drive.py      # builds out/vm, runs 34 checks, saves out/*.png and a recording
 ```
 

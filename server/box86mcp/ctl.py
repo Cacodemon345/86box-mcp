@@ -41,7 +41,7 @@ async def serve(sock_path: str, record: Path | None, out: Path) -> None:
         record.mkdir(parents=True, exist_ok=True)
     seq = len(list(record.glob("*.png"))) if record else 0
 
-    async with stdio_client(StdioServerParameters(command=str(SERVER))) as (r, w):
+    async with stdio_client(StdioServerParameters(command=str(SERVER), env=dict(os.environ))) as (r, w):
         async with ClientSession(r, w) as session:
             await session.initialize()
             done = asyncio.Event()

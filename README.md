@@ -211,10 +211,17 @@ The server's Python package is called `box86mcp`, not `86box_mcp`, because
 Python names can't start with a digit. The package, its command and its
 `BOX86_*` settings all use that name. Agents see the server as `86box`.
 
-You also need [86Box ROMs](https://github.com/86Box/roms) (`BOX86_ROMS`,
-default `~/tools/86box/roms`). For the DOS helpers you need `mtools` and a
-bootable DOS disk image to take the system files from; or install FreeDOS from
-its floppies as in the examples.
+You also need the [86Box ROMs](https://github.com/86Box/roms). Put them where
+86Box looks for them, such as `~/.local/share/86Box/roms`, or point
+`BOX86_ROMS` at them.
+
+For the DOS helpers you also need `mtools` on your `PATH`, and a bootable DOS
+hard disk image to take the system files from: pass it to `dos_create_vm` or
+set `BOX86_DOS_BASE_IMG`. Without one, install FreeDOS from its floppies as in
+the examples.
+
+The tests that boot DOS need that image too, as `BOX86_TEST_BASE_IMG`, and are
+skipped without it.
 
 Then ask your agent something like:
 

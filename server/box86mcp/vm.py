@@ -40,8 +40,13 @@ VOLUME_SERIAL = "86B0C0DE"
 FIXED_MTIME = 1_700_000_000  # 2023-11-14
 # FAT dates are local time; mtools converts in UTC so images don't depend on the host's zone.
 MTOOLS_ENV = {**os.environ, "TZ": "UTC"}
-ROMS = _env_path("BOX86_ROMS", "~/tools/86box/roms")
-MTOOLS_DIR = os.environ.get("BOX86_MTOOLS_DIR", os.path.expanduser("~/tools/hostpkgs/root/usr/bin"))
+# Without BOX86_ROMS, 86Box finds its ROMs itself: in the VM's roms folder, next to the binary, or in
+# the standard data folders (~/.local/share/86Box/roms, /usr/share/86Box/roms on Linux).
+ROMS = _env_path("BOX86_ROMS", "") if os.environ.get("BOX86_ROMS") else None
+# mtools comes from PATH; BOX86_MTOOLS_DIR adds a folder to look in as well.
+MTOOLS_DIR = os.path.expanduser(os.environ["BOX86_MTOOLS_DIR"]) if os.environ.get("BOX86_MTOOLS_DIR") else None
+# A saved CMOS for the default machine, with the hard disk set up, so the BIOS boots without prompting.
+PRIMED_NVR = Path(__file__).resolve().parent / "data" / "primed-nvr"
 
 
 # A 486DX2-66 VLB board close to typical period hardware; time_sync disabled so
@@ -162,19 +167,20 @@ def _free_port() -> int:
 
 
 def _tool(name: str) -> str:
-    found = shutil.which(name) or shutil.which(name, path=MTOOLS_DIR)
+    found = shutil.which(name) or (MTOOLS_DIR and shutil.which(name, path=MTOOLS_DIR))
     if not found:
-        raise FileNotFoundError(f"{name} not found on PATH or in {MTOOLS_DIR}")
+        where = f"on PATH or in {MTOOLS_DIR}" if MTOOLS_DIR else "on PATH (install mtools, or set BOX86_MTOOLS_DIR)"
+        raise FileNotFoundError(f"{name} not found {where}")
     return found
 
 
 class VM:
     """One running 86Box process with an automation connection."""
 
-    def __init__(self, vm_dir: str | os.PathLike, binary: Path = BINARY, roms: Path = ROMS):
+    def __init__(self, vm_dir: str | os.PathLike, binary: Path = BINARY, roms: Path | None = ROMS):
         self.vm_dir = Path(vm_dir).expanduser().resolve()
         self.binary = Path(binary).expanduser()
-        self.roms = Path(roms).expanduser()
+        self.roms = Path(roms).expanduser() if roms else None
         self.run_dir = Path(tempfile.mkdtemp(prefix="box86mcp-"))
         self.log_path = self.run_dir / "86box.log"
         self.proc: subprocess.Popen | None = None
@@ -205,8 +211,9 @@ class VM:
         if log:
             self.serial_logs[1] = log
             self.serial_offsets[1] = 0
-        args = [str(self.binary), "-P", str(self.vm_dir), "-R", str(self.roms), "-N",
-                "--automation", self.endpoint]
+        args = [str(self.binary), "-P", str(self.vm_dir), "-N", "--automation", self.endpoint]
+        if self.roms:
+            args += ["-R", str(self.roms)]
         if self.token_file:
             args += ["--automation-token-file", self.token_file]
         if held:

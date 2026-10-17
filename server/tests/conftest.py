@@ -10,16 +10,18 @@ from pathlib import Path
 import pytest
 
 from box86mcp.vm import FIXED_MTIME, MTOOLS_ENV, VM, _tool, write_config
+from box86mcp.vm import PRIMED_NVR as _PRIMED
 
-BASE_IMG = Path(os.path.expanduser(os.environ.get("BOX86_TEST_BASE_IMG", "~/tools/86box/vms/dos622-base.img")))
+# A bootable DOS 6.22 hard disk image; the tests that boot DOS are skipped without one.
+BASE_IMG = Path(os.path.expanduser(os.environ.get("BOX86_TEST_BASE_IMG", "")))
 # CMOS contents with the hard disk already set up, so the BIOS boots without prompting.
-PRIMED_NVR = Path(os.path.expanduser(os.environ.get("BOX86_TEST_NVR", "~/tools/86box/primed-nvr/dx2-66-vlb")))
+PRIMED_NVR = Path(os.path.expanduser(os.environ["BOX86_TEST_NVR"])) if os.environ.get("BOX86_TEST_NVR") else _PRIMED
 
 AUTOEXEC = "@ECHO OFF\r\nPROMPT $P$G\r\n"
 
 
 def make_dos_vm(dest: Path) -> Path:
-    if not BASE_IMG.exists():
+    if not BASE_IMG.is_file():
         pytest.skip(f"base DOS image {BASE_IMG} not available")
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copy(BASE_IMG, dest / "hdd.img")
