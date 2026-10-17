@@ -244,7 +244,7 @@ without it.
 ### Or run 86Box on Windows
 
 `docker/windows/build.sh` cross-compiles 86Box for 64-bit Windows in a
-Fedora container (MinGW, Qt6, SDL3) and collects the DLLs into
+Fedora container (MinGW, Qt6, SDL3; [details](docker/windows/README.md)) and collects the DLLs into
 `.cache/win64/86Box-automation-win64/`. Start it on Windows with
 `--automation tcp:7086`. It writes a token file and serves on `127.0.0.1`
 unless you also pass `--automation-allow-remote`, so read
@@ -365,7 +365,8 @@ flowchart LR
 The automation socket (`86Box --automation <path> [--automation-hold]`) is a
 line protocol you can also use from scripts or `socat`. See
 [`doc/specifications/automation.md`](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md)
-in 86Box, and [docs/UPSTREAM.md](docs/UPSTREAM.md) for every 86Box change.
+in 86Box. [docs/automation-code-guide.md](docs/automation-code-guide.md) walks
+through the code, and [TODO.md](TODO.md) lists what's still open.
 
 ## Choosing a transport
 
