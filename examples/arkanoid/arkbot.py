@@ -79,6 +79,15 @@ def go(direction):
     held[0] = direction
 
 
+def fire():
+    """Tap fire: shoots the laser when the paddle has one, and releases a caught ball. The game
+    keeps only the last key event, so releasing fire stops the paddle even with a direction key
+    still held (injected keys don't auto-repeat); press the held key again afterwards."""
+    press("space", hold=10)
+    if held[0]:
+        m.a.keys(True, K.parse_combo(held[0]))
+
+
 def steer(target_paddle, tol=1.5):
     p = paddle()
     target = max(PADDLE_MIN, min(PADDLE_MAX, target_paddle))
@@ -125,13 +134,25 @@ def movable():
     return paddle() != p0
 
 
-def start_game(limit_s=90):
-    """From anywhere outside a game: Space through the title and story until round 1 is playable."""
-    for _ in range(limit_s):
-        press("space")
-        m.step(1000)
-        if movable():
+def player_controls():
+    """True when we, not the demo, are moving the paddle: still with no keys held, and moving when
+    a key is pressed. (The attract-mode demo moves it by itself; intros and banners freeze it.)"""
+    go(None)
+    p0 = paddle()
+    m.step(500)
+    if paddle() != p0:
+        return False
+    return movable()
+
+
+def start_game(limit_s=120):
+    """From anywhere outside a game: Space through the title and story until we control the paddle."""
+    for i in range(limit_s // 2):
+        if player_controls():
             return True
+        if i % 2 == 0:
+            press("space")
+        m.step(1500)
     return False
 
 
@@ -207,12 +228,17 @@ def play_sweep(ms, start=0):
     return turn
 
 
-SCORE = 0x233DD   # the score as space-padded ASCII digits
+SCORE = 0x233DD   # a buffer the game formats numbers into for display: usually the player's score
+_last_score = [None]
 
 
 def score():
+    """The player's score as last drawn. The buffer sometimes holds the high score instead, so
+    that value is skipped (keeping the last other one)."""
     s = m.a.memr(SCORE, 8).split(b"\0")[0].decode("ascii", "replace").strip()
-    return int(s) if s.isdigit() else None
+    if s.isdigit() and int(s) != 797320:
+        _last_score[0] = int(s)
+    return _last_score[0]
 
 
 def capsules():
@@ -266,3 +292,76 @@ def play_full(ms, start=0, log_caps=False):
                 press("space")
     go(None)
     return turn
+
+
+LIVES = 0x2CA6A   # probably the lives left (went 3 -> 2 -> 0 at game over)
+
+
+def safe_aim(aim, b):
+    """Shrink the aiming offset for fast balls: aiming uses the paddle's edges, and a fast ball
+    leaves no room for error there."""
+    speed = max(abs(b["dx"]), abs(b["dy"]))
+    limit = 3 if speed > 300 else 5
+    return max(-limit, min(limit, aim))
+
+
+def play_logged_full(ms, logfile, keep=120):
+    """play_full(), writing the frames before each lost ball to logfile (JSON lines)."""
+    import json
+    from collections import deque
+    t0 = m.ms()
+    hist = deque(maxlen=keep)
+    idle = 0
+    turn = 0
+    prev = {}
+    losses = 0
+    n = 0
+    with open(logfile, "a") as log:
+        while m.ms() - t0 < ms:
+            m.step(7)
+            n += 1
+            if n % 25 == 0:
+                fire()
+            bs = balls()
+            cs = capsules()
+            p = paddle()
+            for b in bs:
+                q = prev.get(b["k"])
+                if q and q["dy"] > 0 and b["dy"] < 0 and b["y"] > 165:
+                    turn += 1
+                prev[b["k"]] = b
+            falling = [b for b in bs if b["dy"] > 0]
+            urgent = falling and min((PADDLE_Y - b["y"]) / max(b["dy"] / 256, 0.1) for b in falling) < 70
+            target = None
+            mode = ""
+            if cs and not urgent and (not bs or all(b["dy"] < 0 or b["y"] < 110 for b in bs)):
+                c = max(cs, key=lambda c: c["y"])
+                target = c["x"] - CENTRE + 2
+                mode = "capsule"
+            elif falling:
+                b = min(falling, key=lambda b: (PADDLE_Y - b["y"]) / max(b["dy"], 1))
+                target = landing_x(b) - CENTRE - safe_aim(AIMS[turn % len(AIMS)], b)
+                mode = "ball"
+            elif bs:
+                target = max(bs, key=lambda b: b["y"])["x"] - CENTRE
+                mode = "shadow"
+            if target is not None:
+                steer(target)
+                if idle >= 60:
+                    hist.clear()
+                idle = 0
+            else:
+                go(None)
+                idle += 1
+                if idle == 60:
+                    losses += 1
+                    log.write(json.dumps({"t": m.ms(), "score": score(), "lives": m.a.memr(LIVES, 1)[0],
+                                          "frames": list(hist)}) + "\n")
+                    log.flush()
+                if idle in (60, 300):
+                    press("space")
+            hist.append((m.ms(), p, mode, target and round(target, 1),
+                         [(b["k"], round(b["x"], 1), round(b["y"], 1), b["dx"], b["dy"]) for b in bs],
+                         [(c["k"], round(c["x"], 1), round(c["y"], 1)) for c in cs]))
+    go(None)
+    return losses

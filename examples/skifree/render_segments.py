@@ -14,7 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "server"))
 from box86mcp.ctl import render_timeline  # noqa: E402
 
-ROOT = Path.home() / "86box_mcp/.cache/skifree"
+import os
+ROOT = Path(os.environ.get("RENDER_ROOT", Path.home() / "86box_mcp/.cache/skifree"))
 
 
 def segment(spec: str, out: Path) -> None:

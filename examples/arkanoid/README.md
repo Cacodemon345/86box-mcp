@@ -5,7 +5,7 @@ A bot for the DOS version of Arkanoid II on MS-DOS 6.22, run with
 guest memory every frame (about 14 ms) and steers the paddle with the
 keyboard while time is held between frames.
 
-Best game so far: **386,920**, reaching round 10.
+Best games so far: **386,920** (round 10) and **207,790** (round 5).
 
 ## How it plays
 
@@ -31,6 +31,18 @@ The ball's x runs from about 10.6 to 208.8 between the walls. It meets the
 paddle at y ≈ 180, and a centred hit is ball x − paddle x ≈ 14.
 
 ## Things learned the hard way
+
+- **Injected keys don't auto-repeat, and the game keeps only the last key
+  event.** So tapping fire (to shoot the laser or release a caught ball) while
+  a direction key is held stops the paddle. The bot presses the held key again
+  after every tap; before that fix, a game lost all its lives in seconds.
+- **Aim with the middle of the paddle.** Aiming uses the paddle's edges, which
+  leaves no margin with fast balls, or when a capsule has shrunk the paddle.
+  The bot keeps hits within a few units of the centre.
+- **A ball that stops moving at the paddle has been caught** (the Catch
+  capsule). Firing releases it.
+- **`0x233DD` is a display buffer.** It usually holds the player's score, but
+  sometimes the high score; `score()` skips that value.
 
 - **The extended arrow keys don't move the paddle.** The game only reads the
   keypad codes, so the bot uses numpad 4 and 6.
