@@ -251,6 +251,7 @@ def test_vm_create_from_template(tmp_path):
 
     tpl = make_dos_vm(tmp_path / "tpl")
     cfg = (tpl / "86box.cfg").read_text().replace("mem_size = 16384", "mem_size = 8192")
+    cfg = cfg.replace("[General]", "[General]\nuuid = 11111111-2222-3333-4444-555555555555")
     (tmp_path / "custom.cfg").write_text(cfg)
     nvr = tmp_path / "saved.nvr"
     nvr.write_bytes(bytes(256))
@@ -260,5 +261,6 @@ def test_vm_create_from_template(tmp_path):
     text = (new / "86box.cfg").read_text()
     assert "mem_size = 8192" in text and "hdd_01_parameters = 63, 16, 100, 0, ide" in text
     assert "hdd_01_fn = hdd.img" in text
+    assert "uuid" not in text  # the template's identity stays behind
     assert (new / "nvr" / f"{machine_of(new)}.nvr").read_bytes() == bytes(256)
     assert "as 486sp3c.nvr" in out

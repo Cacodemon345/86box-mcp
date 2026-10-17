@@ -105,6 +105,10 @@ def write_config(vm_dir: str | os.PathLike, cyls: int, heads: int, spt: int, hdd
         cfg.write_text(DX2_66_CFG.format(hdd_fn=hdd_fn, cyls=cyls, heads=heads, spt=spt, speed=speed))
         return cfg
     lines = Path(template).expanduser().read_text().splitlines()
+    # The template's identity must not come along: with a network card configured, 86Box sees a
+    # known uuid in a new folder as a moved or copied machine and stops at a dialog asking which
+    # (invisible when headless). Without a uuid it just makes one, and new MACs come with it.
+    lines = [l for l in lines if l.split("=", 1)[0].strip() not in ("uuid", "mac")]
     old = _ini_get(lines, "Hard disks", "hdd_01_parameters")
     bus = old.split(",")[4].strip() if old and len(old.split(",")) >= 5 else "ide"
     lines = _ini_set(lines, "Hard disks", "hdd_01_fn", hdd_fn)
