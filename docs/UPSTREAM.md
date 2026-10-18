@@ -15,7 +15,18 @@ Two later pull requests add commands the server uses:
 | [#8382](https://github.com/86Box/86Box/pull/8382) | `quit soft`: press the power button (`vm_stop(soft=True)`) |
 | [#8384](https://github.com/86Box/86Box/pull/8384) | `ff on\|off`, and `ff` in `status` (the `fast_forward` tool) |
 
-`86BOX_COMMIT` names an upstream commit with all four, the merge of #8384.
+Later fixes and additions, all merged by 2026-10-18:
+
+| Pull request | What it adds |
+|---|---|
+| [#8390](https://github.com/86Box/86Box/pull/8390) | The automation socket and the GDB stub share a machine: GDB answers while held, and the clock doesn't count time the stub has the CPU stopped (the debugger tools) |
+| [#8391](https://github.com/86Box/86Box/pull/8391) | GDB stub watchpoints see accesses through the memory lookup cache, so they fire on ordinary RAM |
+| [#8392](https://github.com/86Box/86Box/pull/8392) | The automation socket closes when 86Box hits a fatal error, instead of going silent |
+| [#8396](https://github.com/86Box/86Box/pull/8396) | A client's memory reads aren't charged to the emulated CPU |
+| [#8397](https://github.com/86Box/86Box/pull/8397) | `--automation-insecure`: TCP without the token (`BOX86_INSECURE=1`) |
+| [#8402](https://github.com/86Box/86Box/pull/8402) | Warning dialogs don't stop an automated 86Box, and a CD image that won't load is reported to the client |
+
+`86BOX_COMMIT` names an upstream commit with all of them, the merge of #8402.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 

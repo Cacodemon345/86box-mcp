@@ -1,20 +1,22 @@
 ---
 name: 86box
-description: How to drive an 86Box PC emulator through the 86box MCP server (box86mcp) - booting VMs, held versus real-time running, input, reading the screen and memory, installing software, playing real-time programs turn by turn, comparing 86Box builds and measuring speed, the GDB-stub debugger, and working alongside V9x Remote Agent. Use it before calling the 86box server's tools (vm_start, step, act, screen_text, measure_speed, breakpoint_set...), or when planning tests, benchmarks or automation on a vintage PC in 86Box.
+description: How to drive an 86Box PC emulator through the 86box MCP server (box86mcp) - booting VMs, held versus real-time running, input, reading the screen and memory, installing software, playing real-time programs turn by turn, comparing 86Box builds and measuring speed, the GDB-stub debugger, several VMs in lockstep (multiplayer over 86Box's network switch, side-by-side videos), and working alongside V9x Remote Agent. Use it before calling the 86box server's tools (vm_start, step, act, screen_text, measure_speed, breakpoint_set, step_all...), or when planning tests, benchmarks or automation on a vintage PC in 86Box.
 ---
 
 # Driving 86Box through the 86box MCP server
 
 The server controls a PC emulated by 86Box at the hardware level: the emulated keyboard and mouse,
 frames from the emulated video card, physical memory, media, resets. Nothing runs inside the
-guest, so it works from BIOS POST on, under any OS. One VM per server at a time.
+guest, so it works from BIOS POST on, under any OS. One server can run several VMs, named with `vm=`.
 
 ## The time model: decide this first
 
 - **Held (the default).** Emulated time advances only inside tool calls that run it: `step(ms)`,
   `act`, `press_keys`, `type_text`, `wait_for_text`, `wait_for_memory`, `dos_run`. Between calls the
   machine is frozen. Think as long as you like, and the same calls give the same result every time.
-  Held steps run as fast as the host allows, often faster than real time.
+  Held steps run as fast as the host allows, often faster than real time. With several VMs, time
+  passing on one held VM passes on every held VM in its group (all of them, by default): see
+  "Multiplayer, or several VMs" below.
 - **Real time.** `vm_start(held=False)`, or `release` at any point; `hold` goes back.
   `fast_forward(True)` lets a released machine run as fast as the host allows, and
   `fast_forward(False)` returns it to real-time pacing. Use it when
