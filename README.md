@@ -377,6 +377,7 @@ These work with any guest OS:
 |---|---|
 | `vm_create`, `vm_start`, `vm_stop`, `vm_status`, `vm_info` | New VM with a blank disk (512 MB CompactFlash geometry by default), as a 486DX2-66 or a copy of any `86box.cfg` you pass as `config`, with an optional saved CMOS (`nvr`); boot (held by default; `window=True` to watch; without `vm_dir`, the last VM started, or `$BOX86_VM_DIR`); power off, or press the power button and let the guest shut down (`soft=True`); status; machine, CPU, RAM, media, speed and reset counts (a triple fault shows up there) |
 | `hold`, `release`, `step(ms)`, `fast_forward` | Freeze time, run in real time, or run exactly *ms* of emulated time; `fast_forward(True)` lets a released machine run as fast as the host allows |
+| `measure_speed(seconds, paced)` | Emulated seconds per wall second: paced (does it keep up with real time?) or unpaced (throughput, to compare 86Box builds, each started with `vm_start(binary=...)`) |
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
 | `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion; put the pointer at a screen position (closing the loop on where it lands); drag |
@@ -397,6 +398,12 @@ command and wait for the prompt).
 The debugger tools are for developing drivers and device emulation; see
 [docs/driver-development.md](docs/driver-development.md), which also lists
 what else would help and what it would take in 86Box.
+
+**For agents:** [`.claude/skills/86box`](.claude/skills/86box/SKILL.md) is a
+Claude Code skill on how to orchestrate the server: held versus real time,
+workflows (installs, games, comparing builds, the debugger, V9x), and pitfalls.
+Claude Code uses it automatically in this repo; copy the folder to
+`~/.claude/skills/` to have it everywhere.
 
 `python -m box86mcp.ctl` drives the server from a shell, one call at a time,
 and renders recordings into captioned videos; that's how the examples were

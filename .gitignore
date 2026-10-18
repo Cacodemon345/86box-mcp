@@ -2,7 +2,7 @@
 server/.venv/
 __pycache__/
 *.egg-info/
-86box/
+/86box/
 examples/mcpdemo/dist/
 examples/mcpdemo/out/
 

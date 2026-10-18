@@ -23,10 +23,15 @@ from .vm import VM, machine_of, prime_nvr, write_config
 mcp = MCPServer(
     "86box",
     instructions=(
-        "Drives a headless 86Box PC emulator. Start with vm_start. The machine starts HELD: emulated time "
-        "only advances inside tool calls (step, act, press_keys, type_text, wait_for_text, dos_run), so the "
-        "game or program waits while you think. Use release to let it run in real time. Prefer screen_text "
-        "over screenshot in text modes; it is cheaper and exact."
+        "Drives a PC emulated by 86Box. vm_start boots a VM (vm_create or dos_create_vm makes one). "
+        "Time: by default the machine is HELD, so emulated time only advances inside tool calls (step, act, "
+        "press_keys, type_text, wait_for_text, dos_run): a real-time program waits while you think, and runs "
+        "are repeatable. vm_start(held=False), or release, runs it in real time instead, for a person "
+        "watching, a server or agent inside the guest, or real-time behaviour; hold goes back. "
+        "measure_speed reports emulated speed: paced (does it keep up with real time?) or unpaced (raw "
+        "throughput, for comparing builds). vm_start(binary=...) picks the 86Box executable for that start, "
+        "so one session can compare builds. Prefer screen_text over screenshot in text modes; it is cheaper "
+        "and exact. A failing tool says why."
     ),
 )
 
@@ -200,7 +205,7 @@ def _default_vm_dir() -> str:
 
 @tool()
 def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None = None, com1_log: bool = False,
-             debugger: bool = False) -> str:
+             debugger: bool = False, binary: str | None = None) -> str:
     """Boot the 86Box machine whose 86box.cfg lives in vm_dir. Without vm_dir: the VM this session
     last started, else $BOX86_VM_DIR, else the last VM started by any session.
 
@@ -211,18 +216,21 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
     -D GDBSTUB=ON.
+    binary: the 86Box executable to run (built with -D AUTOMATION=ON), for this start only; by default
+    $BOX86_BINARY. Use it to compare builds: vm_start(binary=A), measure, vm_stop, then binary=B.
     """
     global _vm, _held
     if vm_dir is None:
         vm_dir = _default_vm_dir()
     if _vm is not None and _vm.running():
         _vm.stop()
-    _vm = VM(vm_dir)
+    _vm = VM(vm_dir, binary=Path(binary)) if binary else VM(vm_dir)
     status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
     _held = held
     _remember_vm_dir(_vm.vm_dir)
     extras = (", windowed" if _vm.windowed else "") + (f", debugger on port {_vm.gdb_port}" if debugger else "")
-    return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{extras}). Log: {_vm.log_path}"
+    return (f"86Box {status.get('version')} ({_vm.binary}) running from {vm_dir} "
+            f"({'held' if held else 'real-time'}{extras}). Log: {_vm.log_path}")
 
 
 @tool()
@@ -299,6 +307,46 @@ def vm_info() -> dict:
     usually means a crash. speed_percent is measured while running; 100 = real time.
     """
     return vm().auto.info()
+
+
+@tool()
+def measure_speed(seconds: float = 10, paced: bool = True) -> str:
+    """How fast 86Box emulates this machine on this host: emulated seconds per wall second, in %.
+
+    paced=True runs the machine in real time for `seconds` of wall time, as a person would use it:
+    100 % means 86Box keeps up, and it never reads above 100 (86Box waits for real time).
+    paced=False steps `seconds` of emulated time as fast as the host allows: the throughput, uncapped.
+    That is the number to compare 86Box builds or settings by (vm_start(binary=...) for each, the same
+    VM and workload). The machine is left held or running, as it was. The result depends on what the
+    guest is doing at the time and on host load, so measure the same point of the same workload, a
+    few times.
+    """
+    if not 0 < seconds <= 600:
+        raise ValueError("seconds must be in (0, 600]")
+    v = vm()
+    was_held = _held
+    if paced:
+        v.let_cpu_run()
+        v.auto.release()
+        ms0, t0 = v.auto.status()["ms"], time.monotonic()
+        time.sleep(seconds)
+        ms1, t1 = v.auto.status()["ms"], time.monotonic()
+        if was_held:
+            v.auto.hold()
+    else:
+        if not was_held:
+            v.auto.hold()
+        ms0, t0 = v.auto.status()["ms"], time.monotonic()
+        ms1 = v.auto.step(int(seconds * 1000))["ms"]
+        t1 = time.monotonic()
+        if not was_held:
+            v.auto.release()
+    emulated, wall = (ms1 - ms0) / 1000, t1 - t0
+    pct = 100 * emulated / wall if wall else 0.0
+    own = v.auto.info().get("speed_percent")
+    return (f"{pct:.0f} % of real time, {'paced' if paced else 'unpaced'}: {emulated:.1f} s emulated in "
+            f"{wall:.1f} s wall. 86Box's own speed_percent: {own}. "
+            f"Machine left {'held' if was_held else 'running in real time'}.")
 
 
 @tool()
