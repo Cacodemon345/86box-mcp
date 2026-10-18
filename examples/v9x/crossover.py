@@ -64,8 +64,8 @@ class Both:
             text = "".join(c.text for c in res.content if c.type == "text")
             if not res.is_error:
                 return text
-            # The agent serves one client at a time; a connection right behind the previous one
-            # is sometimes dropped. One retry after a pause covers it.
+            # Connections that piled up while held arrive at once on release, and the agent closes
+            # any beyond 4 ("peer closed"). One retry after a pause covers it.
             if "peer closed" in text and attempt == 0:
                 await asyncio.sleep(1.5)
                 continue

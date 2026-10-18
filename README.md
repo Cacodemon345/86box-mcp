@@ -362,7 +362,7 @@ expected.
   86box-mcp holds the machine, nothing in the guest runs, so V9x calls time
   out. `release` while you use V9x, or send a V9x call while a `step` runs:
   the call completes inside the step, and the machine stays held after it.
-- **Pace V9x calls.** The agent serves one client at a time, and calls sent
+- **Pace V9x calls.** The agent takes 4 connections at most, and calls sent
   while the machine is held pile up. See
   [pacing](examples/v9x/README.md#pacing-v9x-calls-around-held-time).
 - **Don't overlap:** 86box-mcp's disk tools need the VM stopped. Use

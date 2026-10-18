@@ -94,29 +94,38 @@ work:
 
 ## Pacing V9x calls around held time
 
-The V9x agent serves one TCP client at a time, through SLiRP, and its
-requests only make progress while emulated time passes. Calls sent while the
-machine is held don't fail cleanly. They queue up:
+V9x's agent only makes progress while emulated time passes, and calls sent
+while the machine is held don't fail cleanly. We measured what happens
+(V9x 0.9.1, with `pacing_backlog.py`):
 
-- The host side connects at once, because SLiRP's listener runs on the host.
-  The guest side of the connection doesn't exist yet: it needs the guest's TCP
-  stack to run.
-- The V9x client gives up after its timeout and closes. When the machine runs
-  again, the guest sees those dead connections and the agent works through
-  them one at a time, before it reaches the live one.
-- In our runs, a connection opened right behind the previous one was
-  occasionally dropped ("peer closed the connection").
+- **SLiRP accepts on the host at once.** Its listener runs on a host thread,
+  so `connect` succeeds even while held, and the request is buffered. SLiRP's
+  own clock and timers run on emulated time, so it doesn't retransmit while
+  held, and 40 queued calls didn't overflow 86Box's 16-packet receive queue.
+- **The calls time out on the host,** after the V9x client's `--timeout`, but
+  the guest still receives them later.
+- **On release, the backlog arrives at once.** The agent takes at most 4
+  connections at a time (`V9X_MAX_CONNECTIONS`) and closes any extra
+  (`client-overflow` in `C:\V9XREMOTE\AGENT.LOG`). For about a second, until
+  the dead connections are served, new calls fail fast with "peer closed the
+  connection". This happened with every backlog from 5 to 40 calls; one call
+  queued while held caused no failure.
+- **A hold during a transfer is harmless if it's shorter than the timeout.** A
+  900 KB download held for 4 s, with an 8 s timeout, finished normally. Held
+  for 15 s it timed out, and the next ping worked at once.
 
 So:
 
-- **One V9x call at a time**, never several in parallel.
 - **Don't send V9x calls while held.** `release` first, or send the call while
-  a `step` runs, and give the step a margin: a ping fits easily in 4 s of
-  emulated time, and a screenshot transfer needs more.
-- **After a timeout, let the guest drain.** Run a few seconds of emulated time,
-  then `v9x_ping` until it answers, before the next real call.
-- **Retry once on "peer closed the connection"**, after a short pause.
+  a `step` runs, with a margin: a ping fits easily in a 4 s step, and a large
+  transfer needs more.
+- **Don't run more than 4 V9x calls in parallel.**
+- **After calls have timed out while held,** release, then retry
+  `v9x_ping` after a 1 s pause until it answers, before the next real call.
+- **Retry once on "peer closed the connection"** after a 1.5 s pause.
   `crossover.py` does this.
+- **Hold briefly during transfers,** or raise V9x's `--timeout` to cover the
+  hold.
 
 ## What works together (from `crossover.py`)
 
