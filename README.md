@@ -478,6 +478,24 @@ emulated machine, memory included. The design follows
 [dosbox-automation's](https://dosbox-automation.org/0.85.1/automation/security/index.html).
 Details are in the [protocol doc](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md#transports-and-security).
 
+### Between your agent and the MCP server
+
+By default the MCP server talks to its client over stdio, as a child process.
+For clients that connect over HTTP instead, set `BOX86_MCP_HTTP_PORT`: the
+server then serves MCP's streamable HTTP transport at
+`http://127.0.0.1:PORT/mcp`. For HTTPS, also set `BOX86_MCP_TLS_CERT` and
+`BOX86_MCP_TLS_KEY` to a PEM certificate and its key:
+
+```sh
+BOX86_MCP_HTTP_PORT=8443 BOX86_MCP_TLS_CERT=cert.pem BOX86_MCP_TLS_KEY=key.pem box86mcp
+# -> https://localhost:8443/mcp
+```
+
+Either way it listens only on `127.0.0.1`, with the MCP library's DNS-rebinding
+protection (only `localhost` hosts and origins). There is no authentication:
+any local process can connect and drive the VM, and through `vm_create` and
+the disk tools, read and write files as you.
+
 ## Status and limitations
 
 This is an early release, built for developing our own DOS games and tools.

@@ -1129,10 +1129,35 @@ def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, l
     return f"{bus:02x}:{device:02x}.{function} config:\n" + "\n".join(rows)
 
 
+def _run_https(port: int, cert: str, key: str) -> None:
+    """Streamable HTTP over TLS, on loopback like plain HTTP. The SDK's own runner has no TLS
+    options, so run its app with uvicorn here."""
+    import uvicorn
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    loopback = ("127.0.0.1", "localhost", "[::1]")
+    # The SDK's DNS-rebinding protection for loopback allows only http:// origins; add https://.
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[f"{h}:*" for h in loopback],
+        allowed_origins=[f"{scheme}://{h}:*" for scheme in ("http", "https") for h in loopback],
+    )
+    app = mcp.streamable_http_app(transport_security=security, host="127.0.0.1")
+    uvicorn.run(app, host="127.0.0.1", port=port, ssl_certfile=cert, ssl_keyfile=key,
+                log_level=mcp.settings.log_level.lower())
+
+
 def main() -> None:
     httpport = os.environ.get('BOX86_MCP_HTTP_PORT', '0')
-    if httpport != '0':
+    cert, key = os.environ.get("BOX86_MCP_TLS_CERT"), os.environ.get("BOX86_MCP_TLS_KEY")
+    if bool(cert) != bool(key):
+        raise SystemExit("set both BOX86_MCP_TLS_CERT and BOX86_MCP_TLS_KEY (PEM files), or neither")
+    if httpport != '0' and cert:
+        _run_https(int(httpport), cert, key)
+    elif httpport != '0':
         mcp.run(transport="streamable-http", port=int(httpport))
+    elif cert:
+        raise SystemExit("BOX86_MCP_TLS_CERT and BOX86_MCP_TLS_KEY need BOX86_MCP_HTTP_PORT")
     else:
         mcp.run()
 
