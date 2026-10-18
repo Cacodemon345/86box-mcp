@@ -302,7 +302,9 @@ class VM:
             args.append("--automation-hold")
         args += extra_args or []
         env = dict(os.environ)
-        if window:
+        if window and os.name == "nt":
+            env.pop("QT_QPA_PLATFORM", None)   # Windows: Qt's native platform shows the window
+        elif window:
             if not env.get("DISPLAY"):
                 raise RuntimeError("window=True needs DISPLAY set to an X server (Wayland users: XWayland)")
             env["QT_QPA_PLATFORM"] = "xcb"
@@ -420,13 +422,18 @@ class VM:
             try:
                 self.proc.wait(timeout)
             except subprocess.TimeoutExpired:
-                # SIGTERM first: docker/86box.sh traps it to kill its container.
-                os.killpg(self.proc.pid, signal.SIGTERM)
-                try:
-                    self.proc.wait(10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(self.proc.pid, signal.SIGKILL)
+                if os.name == "nt":
+                    # No process groups: closing the guard's stdin below stops 86Box; kill the guard.
+                    self.proc.kill()
                     self.proc.wait()
+                else:
+                    # SIGTERM first: docker/86box.sh traps it to kill its container.
+                    os.killpg(self.proc.pid, signal.SIGTERM)
+                    try:
+                        self.proc.wait(10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(self.proc.pid, signal.SIGKILL)
+                        self.proc.wait()
         if self.gdb is not None:
             self.gdb.close()
             self.gdb = None
