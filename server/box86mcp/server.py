@@ -6,6 +6,7 @@ import functools
 import io
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -178,10 +179,13 @@ _binary: Path | None = None     # chosen with vm_start(binary=...); sticks for t
 
 
 def _find_binary(given: str) -> Path:
-    """An 86Box executable, from a path to one, to a CMake build folder, or to an 86Box checkout."""
+    """An 86Box executable, from a path to one, a bare name on PATH (86Box-nightly.exe), a CMake build
+    folder, or an 86Box checkout."""
     path = Path(given).expanduser()
     if not path.is_absolute():
-        path = Path.cwd() / path
+        on_path = shutil.which(given) if not (Path.cwd() / path).exists() and os.sep not in given \
+            and "/" not in given else None
+        path = Path(on_path) if on_path else Path.cwd() / path
     exe = "86Box.exe" if os.name == "nt" else "86Box"
     if path.is_dir():
         candidates = [path / "src" / exe, path / exe] + sorted(path.glob(f"*/src/{exe}"))
@@ -237,9 +241,9 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
     -D GDBSTUB=ON.
-    binary: the 86Box to run (built with -D AUTOMATION=ON): the executable, or a CMake build folder or
-    86Box checkout to find it in (build/src/86Box, for a worktree). Absolute, or relative to the server's
-    working directory. It sticks for the rest of the session; by default $BOX86_BINARY. To compare or
+    binary: the 86Box to run (built with -D AUTOMATION=ON): the executable's path or its name on PATH,
+    or a CMake build folder or 86Box checkout to find it in (build/src/86Box, for a worktree). Paths
+    are absolute, or relative to the server's working directory. It sticks for the rest of the session; by default $BOX86_BINARY. To compare or
     bisect builds: vm_start(binary=A), measure, vm_stop, then binary=B.
     """
     global _vm, _held

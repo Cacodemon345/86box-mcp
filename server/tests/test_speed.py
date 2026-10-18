@@ -68,3 +68,18 @@ def test_chosen_binary_sticks(tmp_path, monkeypatch):
         assert str(BINARY) in S.vm_start(vm)          # no binary: the one chosen before
     finally:
         S.vm_stop()
+
+
+def test_binary_by_name_on_path(tmp_path, monkeypatch):
+    import os
+
+    from box86mcp import server as S
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / ("86Box-nightly.exe" if os.name == "nt" else "86Box-nightly")
+    exe.write_text("")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.chdir(tmp_path)
+    assert S._find_binary(exe.name) == exe
