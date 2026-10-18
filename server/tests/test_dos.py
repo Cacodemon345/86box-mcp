@@ -264,3 +264,22 @@ def test_vm_create_from_template(tmp_path):
     assert "uuid" not in text  # the template's identity stays behind
     assert (new / "nvr" / f"{machine_of(new)}.nvr").read_bytes() == bytes(256)
     assert "as 486sp3c.nvr" in out
+
+
+def test_copied_vm_with_a_network_card_starts(tmp_path):
+    """A uuid from another folder plus a network card made 86Box ask whether the VM was moved or
+    copied, before starting the machine: headless, a hang. start() drops the stale uuid."""
+    from conftest import make_dos_vm
+    from box86mcp.vm import VM
+
+    d = make_dos_vm(tmp_path / "copy")
+    cfg = d / "86box.cfg"
+    text = cfg.read_text().replace("[General]", "[General]\nuuid = 11111111-2222-3333-4444-555555555555")
+    cfg.write_text(text + "\n[Network]\nnet_01_card = ne2kpnp\nnet_01_net_type = slirp\n")
+    vm = VM(d)
+    vm.auto.timeout = 30
+    vm.start(held=True)
+    try:
+        assert vm.auto.wait_text("C:\\>", 60000)["matched"]
+    finally:
+        vm.stop()

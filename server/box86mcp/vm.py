@@ -276,6 +276,14 @@ class VM:
             raise FileNotFoundError(f"{self.vm_dir}/86box.cfg not found")
         if not self.binary.exists():
             raise FileNotFoundError(f"86Box binary {self.binary} not found (set BOX86_BINARY)")
+        # A uuid that doesn't match the folder (a copied or moved VM) makes 86Box ask, before it
+        # starts the machine, whether the VM was moved or copied; headless, that is a silent hang.
+        # Without one, 86Box makes a new one and doesn't ask.
+        cfg = self.vm_dir / "86box.cfg"
+        lines = cfg.read_text().splitlines()
+        kept = [l for l in lines if l.split("=", 1)[0].strip() != "uuid"]
+        if kept != lines:
+            cfg.write_text("\n".join(kept) + "\n")
         if debugger:
             # Every 86Box stub listens on 12345 unless told otherwise; give this one its own port.
             cfg = self.vm_dir / "86box.cfg"
