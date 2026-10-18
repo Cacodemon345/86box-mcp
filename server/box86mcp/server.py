@@ -1130,7 +1130,11 @@ def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, l
 
 
 def main() -> None:
-    mcp.run()
+    httpport = os.environ.get('BOX86_MCP_HTTP_PORT', '0')
+    if httpport != '0':
+        mcp.run(transport="streamable-http", port=int(httpport))
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
