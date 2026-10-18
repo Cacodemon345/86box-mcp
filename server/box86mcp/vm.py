@@ -320,6 +320,8 @@ class VM:
                                   f"this server supports {sorted(SUPPORTED_PROTOCOLS)}")
         if debugger:
             self.attach_debugger()
+        elif not held:
+            self.let_cpu_run()
         return status
 
     # GDB stub ---------------------------------------------------------------
@@ -357,6 +359,19 @@ class VM:
             yield
         finally:
             self._expect_stop = False
+
+    def let_cpu_run(self) -> None:
+        """Before running in real time: a GDB-stub build starts the CPU stopped, and only a timed
+        command would notice. Without a debugger, let it go now (looked up once per VM)."""
+        if self.gdb is not None or self._stub_let_go:
+            return
+        port = self._stub_port(wait=1)
+        self._stub_let_go = True
+        if port is not None:
+            try:
+                Gdb(self.stub_host, port).close()
+            except OSError:
+                pass
 
     def _debugger_stop(self, request: str, reply: dict) -> dict:
         if self.gdb is not None:

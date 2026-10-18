@@ -243,7 +243,9 @@ def release() -> str:
     """Let the machine run in real time between tool calls."""
     global _held
     _held = False
-    return _time_note(vm().auto.release())
+    v = vm()
+    v.let_cpu_run()
+    return _time_note(v.auto.release())
 
 
 @mcp.tool()

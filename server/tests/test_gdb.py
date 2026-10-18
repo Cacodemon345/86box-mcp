@@ -108,6 +108,16 @@ def test_stub_build_runs_without_a_debugger(tmp_path, server):
 
 
 @needs_gdb_build
+def test_stub_build_runs_in_real_time(tmp_path, server):
+    """release, with no timed command at all, must let the stub's stopped CPU go too."""
+    import time
+    server.vm_start(str(make_dos_vm(tmp_path / "vm")))
+    server.release()
+    time.sleep(3)
+    assert server.vm_status()["ms"] > 1000
+
+
+@needs_gdb_build
 def test_breakpoints_steps_and_ports(tmp_path, server):
     server.vm_start(str(make_dos_vm(tmp_path / "vm")), debugger=True)
     assert "found" in server.wait_for_text("C:\\>", 30000)
