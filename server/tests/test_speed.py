@@ -35,3 +35,36 @@ def test_measure_speed_and_binary(tmp_path):
         assert S.vm_status()["held"] is False
     finally:
         S.vm_stop()
+
+
+def test_binary_from_a_build_folder_sticks(tmp_path, monkeypatch):
+    """vm_start(binary=<build folder>) finds src/86Box in it, and later starts keep it."""
+    import os
+
+    from box86mcp import server as S
+
+    exe = "86Box.exe" if os.name == "nt" else "86Box"
+    build = tmp_path / "worktree" / "build"
+    (build / "src").mkdir(parents=True)
+    (build / "src" / exe).write_text("")
+    assert S._find_binary(str(build)) == build / "src" / exe
+    assert S._find_binary(str(tmp_path / "worktree")) == build / "src" / exe     # the checkout
+    monkeypatch.chdir(tmp_path)
+    assert S._find_binary("worktree/build") == build / "src" / exe              # relative
+    import pytest
+    with pytest.raises(FileNotFoundError, match="no 86Box"):
+        S._find_binary(str(tmp_path))
+
+
+def test_chosen_binary_sticks(tmp_path, monkeypatch):
+    from box86mcp import server as S
+    from box86mcp.vm import BINARY
+
+    monkeypatch.setattr(S, "_binary", None)
+    vm = str(make_dos_vm(tmp_path / "vm"))
+    try:
+        S.vm_start(vm, binary=str(BINARY))
+        S.vm_stop()
+        assert str(BINARY) in S.vm_start(vm)          # no binary: the one chosen before
+    finally:
+        S.vm_stop()

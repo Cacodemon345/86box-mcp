@@ -174,6 +174,27 @@ def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None
     return f"copied {', '.join(copied)} to C:{dest_dir}"
 
 
+_binary: Path | None = None     # chosen with vm_start(binary=...); sticks for the session
+
+
+def _find_binary(given: str) -> Path:
+    """An 86Box executable, from a path to one, to a CMake build folder, or to an 86Box checkout."""
+    path = Path(given).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    exe = "86Box.exe" if os.name == "nt" else "86Box"
+    if path.is_dir():
+        candidates = [path / "src" / exe, path / exe] + sorted(path.glob(f"*/src/{exe}"))
+        found = next((c for c in candidates if c.is_file()), None)
+        if found is None:
+            raise FileNotFoundError(f"no {exe} in {path}: looked for src/{exe}, {exe} and */src/{exe} "
+                                    "(a build folder, or a checkout with one inside)")
+        return found
+    if not path.exists():
+        raise FileNotFoundError(f"86Box binary {path} not found")
+    return path
+
+
 def _state_file() -> Path:
     base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME")
     return Path(base or Path.home() / ".cache").expanduser() / "box86mcp" / "last_vm"
@@ -216,15 +237,20 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
     -D GDBSTUB=ON.
-    binary: the 86Box executable to run (built with -D AUTOMATION=ON), for this start only; by default
-    $BOX86_BINARY. Use it to compare builds: vm_start(binary=A), measure, vm_stop, then binary=B.
+    binary: the 86Box to run (built with -D AUTOMATION=ON): the executable, or a CMake build folder or
+    86Box checkout to find it in (build/src/86Box, for a worktree). Absolute, or relative to the server's
+    working directory. It sticks for the rest of the session; by default $BOX86_BINARY. To compare or
+    bisect builds: vm_start(binary=A), measure, vm_stop, then binary=B.
     """
     global _vm, _held
     if vm_dir is None:
         vm_dir = _default_vm_dir()
     if _vm is not None and _vm.running():
         _vm.stop()
-    _vm = VM(vm_dir, binary=Path(binary)) if binary else VM(vm_dir)
+    global _binary
+    if binary:
+        _binary = _find_binary(binary)
+    _vm = VM(vm_dir, binary=_binary) if _binary else VM(vm_dir)
     status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
     _held = held
     _remember_vm_dir(_vm.vm_dir)

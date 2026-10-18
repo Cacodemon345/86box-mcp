@@ -354,7 +354,10 @@ class VM:
             self.auto.connect(wait=60)
         except AutomationError:
             self.stop()
-            raise AutomationError(f"86Box did not open its automation socket; log tail:\n{self.log_tail()}")
+            hint = ""
+            if "Automation:" not in self.log_tail(400):       # an automation build logs that at startup
+                hint = f" (is {self.binary} built with -D AUTOMATION=ON?)"
+            raise AutomationError(f"86Box did not open its automation socket{hint}; log tail:\n{self.log_tail()}")
         status = self.auto.status()
         if status.get("protocol") not in SUPPORTED_PROTOCOLS:
             self.stop()
