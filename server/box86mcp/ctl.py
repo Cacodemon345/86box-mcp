@@ -20,11 +20,16 @@ import asyncio
 import base64
 import json
 import os
+import secrets
 import socket
 import sys
+import tempfile
 from pathlib import Path
 
-DEFAULT_SOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "box86mcp-ctl.sock")
+DEFAULT_SOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(), "box86mcp-ctl.sock")
+# Windows' asyncio has no UNIX sockets: there the daemon listens on loopback TCP, and the "socket"
+# path is an owner-only file holding the port and a random token that every request must carry.
+USE_TCP = os.name == "nt" or os.environ.get("BOX86_CTL_TCP") == "1"   # the override is for testing
 SERVER = Path(sys.executable).with_name("box86mcp")
 # Calls that already return a frame, or after which there is no machine to look at.
 NO_EXTRA_FRAME = {"screenshot", "act", "vm_stop", "vm_create", "dos_create_vm", "dos_install_files"}
@@ -55,8 +60,13 @@ async def serve(sock_path: str, record: Path | None, out: Path) -> None:
                 with open(record / "captions.jsonl", "a") as f:
                     f.write(json.dumps({"frame": f"{seq:05d}.png", "caption": caption}) + "\n")
 
+            token = secrets.token_hex(16)
+
             async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
                 req = json.loads(await reader.readline())
+                if USE_TCP and not secrets.compare_digest(str(req.get("token")), token):
+                    writer.close()      # loopback TCP is open to every local process
+                    return
                 if req.get("tool") == "__stop__":
                     writer.write(b'{"text": "stopping"}\n')
                     await writer.drain()
@@ -114,17 +124,37 @@ async def serve(sock_path: str, record: Path | None, out: Path) -> None:
 
             if os.path.exists(sock_path):
                 os.unlink(sock_path)
-            srv = await asyncio.start_unix_server(handle, sock_path, limit=1 << 24)
+            if USE_TCP:
+                srv = await asyncio.start_server(handle, "127.0.0.1", 0, limit=1 << 24)
+                port = srv.sockets[0].getsockname()[1]
+                fd = os.open(sock_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    json.dump({"port": port, "token": token}, f)
+            else:
+                old = os.umask(0o177)       # owner-only, from the moment it exists
+                try:
+                    srv = await asyncio.start_unix_server(handle, sock_path, limit=1 << 24)
+                finally:
+                    os.umask(old)
             print(f"mcpctl serving on {sock_path}", flush=True)
             async with srv:
                 await done.wait()
             os.unlink(sock_path)
 
 
-def call(sock_path: str, tool: str, args: dict) -> int:
+def _connect(sock_path: str) -> tuple[socket.socket, str | None]:
+    if USE_TCP:
+        with open(sock_path) as f:
+            where = json.load(f)
+        return socket.create_connection(("127.0.0.1", where["port"])), where["token"]
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(sock_path)
-    s.sendall((json.dumps({"tool": tool, "args": args}) + "\n").encode())
+    return s, None
+
+
+def call(sock_path: str, tool: str, args: dict) -> int:
+    s, token = _connect(sock_path)
+    s.sendall((json.dumps({"tool": tool, "args": args, "token": token}) + "\n").encode())
     data = b""
     while not data.endswith(b"\n"):
         chunk = s.recv(1 << 20)

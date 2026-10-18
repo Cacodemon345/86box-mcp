@@ -103,6 +103,39 @@ unless you also pass `--automation-allow-remote`, so read
 [Choosing a transport](#choosing-a-transport) first. Then connect from the MCP
 server with `vm_attach("tcp:<windows-ip>:7086", "<token>")`.
 
+### Or run everything on Windows
+
+The MCP server also runs natively on Windows, next to a Windows 86Box. A
+user has run it on Windows 11, without WSL, through its own `VM` class and
+through Claude Code over MCP: boot, held steps, typing, the text screen,
+screenshots, memory, registers and `window=True`. We haven't tested it on
+Windows ourselves yet.
+
+1. **86Box with the automation socket:** cross-compile it with
+   `docker/windows/build.sh` as above, or build it in MSYS2 (MinGW64):
+   `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DQT=ON -DAUTOMATION=ON`.
+2. **The server:**
+   ```bat
+   py -3.12 -m venv server\.venv
+   server\.venv\Scripts\python -m pip install -e server
+   ```
+3. **Register it with your agent**, with `BOX86_BINARY` pointing at
+   `86Box.exe`, and with the folder holding its DLLs on `PATH` (for an MSYS2
+   build, `C:\msys64\mingw64\bin`). For example:
+   ```bat
+   claude mcp add 86box -e BOX86_BINARY=C:\86Box\86Box.exe ^
+       -e "PATH=C:\msys64\mingw64\bin;C:\Windows\System32;C:\Windows" ^
+       -- C:\86box-mcp\server\.venv\Scripts\box86mcp.exe
+   ```
+
+On Windows the server talks to 86Box over TCP on `127.0.0.1`, with a token
+(there are no UNIX sockets). `window=True` shows the normal 86Box window. The
+DOS disk tools (`dos_create_vm`, `dos_install_files`, `dos_put_floppy`) need
+mtools (`mformat`, `mcopy`, `mmd`, `mattrib`) on `PATH` or in
+`BOX86_MTOOLS_DIR`; MSYS2 has a `mtools` package. Recordings need `ffmpeg`
+on `PATH`. `python -m box86mcp.ctl` listens on loopback TCP, with a token in
+an owner-only file. The debugger tools need 86Box built with `-DGDBSTUB=ON`.
+
 ### Connect your agent
 
 ```sh
@@ -502,12 +535,13 @@ This is an early release, built for developing our own DOS games and tools.
 
 - **86Box must be built with `-D AUTOMATION=ON`.** The automation socket is in
   upstream 86Box, but official releases are built without it.
-- **Windows: 86Box yes, the MCP server not yet.** 86Box with the automation
-  socket has been built for 64-bit Windows and driven over TCP from a Linux
-  machine with `vm_attach`. That covered boot, typing, screen text,
-  screenshots, memory and registers, held and real-time running, and a
-  clean power-off. The MCP server's own launcher and disk tooling haven't run
-  on Windows, and macOS hasn't been tried at all.
+- **Windows: best effort, untested by us.** 86Box with the automation socket
+  has been built for 64-bit Windows and driven over TCP from Linux with
+  `vm_attach`. The MCP server itself has been run natively on Windows 11 by a
+  user (see [Or run everything on Windows](#or-run-everything-on-windows)), and
+  its Windows code paths (stopping 86Box, `window=True`, the `ctl` CLI) follow
+  that report. The disk tools, the debugger and the stop fallback haven't run
+  on Windows. macOS hasn't been tried at all.
 - **Mouse input is relative.** (See [Tips for Windows 3.x](#tips-for-windows-3x).) DOS and Windows 3.x drivers only understand
   relative mice, so `mouse_to` closes the loop. It reads the pointer from
   memory if your program publishes it, or finds it on screen. On screen it

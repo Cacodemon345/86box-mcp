@@ -27,14 +27,17 @@ _REPO = Path(__file__).resolve().parents[2]
 
 
 def _default_binary() -> str:
-    """A native build in 86box/build-mcp made with -D AUTOMATION=ON, else the Docker wrapper."""
+    """A native build in 86box/build-mcp made with -D AUTOMATION=ON, else the Docker wrapper.
+    Windows has no Docker wrapper: there it's the native build, or BOX86_BINARY."""
     build = _REPO / "86box" / "build-mcp"
-    native = build / "src" / "86Box"
+    native = build / "src" / ("86Box.exe" if os.name == "nt" else "86Box")
     try:
         automation = "AUTOMATION:BOOL=ON" in (build / "CMakeCache.txt").read_text()
     except OSError:
         automation = False
-    return str(native if native.exists() and automation else _REPO / "docker" / "86box.sh")
+    if os.name == "nt" or (native.exists() and automation):
+        return str(native)
+    return str(_REPO / "docker" / "86box.sh")
 
 
 BINARY = _env_path("BOX86_BINARY", _default_binary())
@@ -333,7 +336,9 @@ class VM:
         guard = [sys.executable, str(Path(__file__).with_name("guard.py"))]
         self._mem_bytes = None
         self.proc = subprocess.Popen(guard + args, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                     env=env, start_new_session=True)
+                                     env=env, start_new_session=True,
+                                     # Windows: its own process group, so a console Ctrl+C doesn't reach it.
+                                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         log.close()
         try:
             self.auto.connect(wait=60)
@@ -591,15 +596,19 @@ class VM:
         iso.close()
         return iso_path
 
+    def visible(self, path: str | os.PathLike) -> Path:
+        """path, as 86Box can open it. The Docker wrapper mounts only $HOME, /tmp and the repo, so
+        files elsewhere are copied into the run directory first; a native 86Box sees everything."""
+        path = Path(path).expanduser().resolve()
+        if self.binary.name == "86box.sh" and not any(path.is_relative_to(p) for p in (Path.home(), Path("/tmp"))):
+            copy = self.run_dir / path.name
+            shutil.copy(path, copy)
+            path = copy
+        return path
+
     def load_cdrom(self, image: str | os.PathLike, drive: int = 0) -> dict:
-        """Insert a CD image. Images outside paths 86Box can see are copied into the run directory."""
-        image = Path(image).expanduser().resolve()
-        visible = (Path.home(), Path("/tmp"))
-        if not any(image.is_relative_to(p) for p in visible):
-            copy = self.run_dir / image.name
-            shutil.copy(image, copy)
-            image = copy
-        return self.auto.call(f"cd load {drive} {image}")
+        """Insert a CD image."""
+        return self.auto.call(f"cd load {drive} {self.visible(image)}")
 
     def load_floppy(self, img: str | os.PathLike, drive: int = 0) -> dict:
         return self.auto.call(f"fdd load {drive} {img}")

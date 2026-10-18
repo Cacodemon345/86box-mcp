@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import os
 import re
-import shutil
 import time
 from pathlib import Path
 
@@ -691,15 +690,11 @@ def dos_put_floppy(paths: list[str], drive: str = "A") -> str:
 def floppy_insert(image: str, drive: str = "A", write_protect: bool = False) -> str:
     """Insert an existing floppy image (.img/.ima/.86f, ...) in drive A: or B:. Works for any guest.
 
-    Images outside $HOME and /tmp are copied first. With write_protect=False the guest can write to the
-    image file itself.
+    With the Docker-run 86Box, images outside $HOME and /tmp are copied first. With
+    write_protect=False the guest can write to the image file itself.
     """
     v = vm()
-    path = Path(image).expanduser().resolve()
-    if not any(path.is_relative_to(p) for p in (Path.home(), Path("/tmp"))):
-        copy = v.run_dir / path.name
-        shutil.copy(path, copy)
-        path = copy
+    path = v.visible(image)
     index = 0 if drive.upper().startswith("A") else 1
     v.load_floppy(("wp://" if write_protect else "") + str(path), index)  # str: Path would collapse "//"
     mounted = [f["file"] for f in v.auto.info()["floppy"] if f["drive"] == index]
