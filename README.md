@@ -599,6 +599,9 @@ This is an early release, built for developing our own DOS games and tools.
   them, the GDB stub can't answer while the machine is held, and memory
   watchpoints on RAM don't fire. See
   [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
+- **No sound, in any form.** The guest's sound card is emulated (games play
+  their music to 86Box), but nothing reaches you: no audio in recordings or
+  videos, and no tool to capture, hear or check it.
 - **COM1 output only.** The guest can't read serial input yet. Capturing COM1
   (`vm_start(com1_log=True)`) is off by default. It used to look like it made
   runs occasionally non-reproducible (about 2 in 6). A likelier cause has since
