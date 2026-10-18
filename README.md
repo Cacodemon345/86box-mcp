@@ -437,9 +437,11 @@ This is an early release, built for developing our own DOS games and tools.
   does in its keyboard-driven dialogs), and busy animation can mask it.
   86Box's absolute devices (tablets, touchscreens) need guest drivers that
   these systems don't ship.
-- **The debugger needs 86Box fixes that aren't upstream yet.** Without them,
-  the GDB stub can't answer while the machine is held, and memory watchpoints
-  on RAM don't fire. See
+- **The debugger needs 86Box fixes that aren't upstream yet:**
+  [86Box#8390](https://github.com/86Box/86Box/pull/8390) and
+  [86Box#8391](https://github.com/86Box/86Box/pull/8391). Without them, the GDB
+  stub can't answer while the machine is held, and memory watchpoints on RAM
+  don't fire. See
   [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
 - **COM1 output only.** The guest can't read serial input yet. Capturing COM1
   (`vm_start(com1_log=True)`) is off by default. It used to look like it made

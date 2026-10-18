@@ -48,10 +48,12 @@ FIFO, changes just as if the driver had read it.
 1. Build 86Box with the stub as well as the automation socket:
    `docker/build.sh -D GDBSTUB=ON`, or add `-D GDBSTUB=ON` to your own
    CMake line.
-2. Use an 86Box with two fixes that aren't upstream yet. One lets the stub and
-   the automation socket share a machine: without it, GDB gets no answers while
-   the machine is held, and the automation clock counts time while the stub has
-   the CPU stopped. The other makes memory watchpoints fire on ordinary RAM.
+2. Use an 86Box with two fixes that aren't upstream yet.
+   [86Box#8390](https://github.com/86Box/86Box/pull/8390) lets the stub and the
+   automation socket share a machine: without it, GDB gets no answers while the
+   machine is held, and the automation clock counts time while the stub has the
+   CPU stopped. [86Box#8391](https://github.com/86Box/86Box/pull/8391) makes
+   memory watchpoints fire on ordinary RAM.
 3. `vm_start(vm_dir, debugger=True)`.
 
 A build with the stub also works without `debugger=True`. The stub starts the
