@@ -303,6 +303,38 @@ kind of mismatch to look for when you emulate a device. See
 [the example's README](examples/v9x/README.md) for the setup and
 [driver development](docs/driver-development.md) for the debugger.
 
+#### Benchmarking 86Box releases: 3DMark 99 on a Voodoo 2
+
+![3DMark 99's Game 2 on the emulated Voodoo 2, captured by 86box-mcp](docs/images/3dmark99-voodoo2.png)
+
+[`bench/`](bench/) is a tool for 86Box developers. It runs one or more 86Box
+builds through the same workload: Windows 98 boots, then 3DMark 99 MAX's full
+benchmark runs on a 3dfx Voodoo 2. Each run starts from a pristine copy of a
+prepared disk image, and the tool reports three things.
+
+- **Reliability:** every phase finished, with no resets.
+- **Speed:** emulated seconds per wall second. The boot and the benchmark run
+  held, stepping as fast as the host allows, so the number isn't capped by
+  real-time pacing.
+- **3DMark's own results**, which it measures in emulated time, so they
+  reflect the emulation.
+
+`pytest bench/` turns a run into pass/fail checks for CI.
+
+Comparing current master with a build from before the old recompiler's
+removal, it found:
+
+- The older build crashes (`fatal("Over limit!")`) when 3DMark's Result
+  Browser starts, and runs the benchmark about 20 % slower.
+- On a fatal error the automation socket went silent instead of closing
+  ([86Box#8392](https://github.com/86Box/86Box/pull/8392)).
+- Game 2 runs at one of two speeds from run to run, so the overall score is
+  about 1,645 or 1,842.
+- The emulated Voodoo 2 multi-textures about 20 times faster than the real
+  card.
+
+See [bench/README.md](bench/README.md).
+
 ## Tools
 
 These work with any guest OS:
