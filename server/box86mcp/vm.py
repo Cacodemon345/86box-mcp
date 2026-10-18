@@ -260,6 +260,7 @@ class VM:
     def __init__(self, vm_dir: str | os.PathLike, binary: Path = BINARY, roms: Path | None = ROMS):
         self.vm_dir = Path(vm_dir).expanduser().resolve()
         self.binary = Path(binary).expanduser()
+        self.windowed = False
         self.roms = Path(roms).expanduser() if roms else None
         self.run_dir = Path(tempfile.mkdtemp(prefix="box86mcp-"))
         self.log_path = self.run_dir / "86box.log"
@@ -290,9 +291,10 @@ class VM:
         self._expect_stop = False      # inside a debugger step or run, a stop is the expected result
         self.breaks: set[tuple[int, str, int]] = set()   # (address, kind, length) set through the stub
 
-    def start(self, held: bool = True, window: bool = False, extra_args: list[str] | None = None,
+    def start(self, held: bool = True, window: bool | None = None, extra_args: list[str] | None = None,
               com1_log: bool = False, debugger: bool = False) -> dict:
-        """Launch 86Box. window=True shows the normal 86Box window on $DISPLAY. com1_log=True captures
+        """Launch 86Box. window=True shows the normal 86Box window (on $DISPLAY, outside Windows);
+        the default, None, shows it on Windows and runs headless elsewhere. com1_log=True captures
         COM1 output (off by default: with it, runs are not always byte-for-byte reproducible).
         debugger=True attaches to 86Box's GDB stub, for breakpoints, instruction steps and port I/O
         (86Box built with -D GDBSTUB=ON); see self.gdb."""
@@ -327,6 +329,9 @@ class VM:
             args.append("--automation-hold")
         args += extra_args or []
         env = dict(os.environ)
+        if window is None:
+            window = os.name == "nt"
+        self.windowed = window
         if window and os.name == "nt":
             env.pop("QT_QPA_PLATFORM", None)   # Windows: Qt's native platform shows the window
         elif window:

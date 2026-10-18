@@ -141,13 +141,13 @@ def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None
 
 
 @mcp.tool()
-def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False, com1_log: bool = False,
+def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None = None, com1_log: bool = False,
              debugger: bool = False) -> str:
     """Boot the 86Box machine whose 86box.cfg lives in vm_dir. vm_dir defaults to the last VM.
 
     held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
-    window=True shows the 86Box window on the host's display so a person can watch (and also type);
-    the default runs without a window. com1_log=True captures COM1 output for serial_read and
+    window=True shows the 86Box window on the host's display so a person can watch (and also type),
+    and window=False runs without one. By default the window shows on Windows, and not elsewhere. com1_log=True captures COM1 output for serial_read and
     wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
@@ -163,7 +163,7 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False,
     _vm = VM(vm_dir)
     status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
     _held = held
-    extras = (", windowed" if window else "") + (f", debugger on port {_vm.gdb_port}" if debugger else "")
+    extras = (", windowed" if _vm.windowed else "") + (f", debugger on port {_vm.gdb_port}" if debugger else "")
     return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{extras}). Log: {_vm.log_path}"
 
 
