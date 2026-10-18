@@ -343,9 +343,30 @@ Remote Agent. For **DOS** games and programs, real-time or graphics-mode
 software, deterministic tests, OS installs, or anything that happens before an
 OS is up, use 86box-mcp.
 
-The two should also combine: a Windows 98 VM can run the V9x agent for
-commands and files while 86box-mcp holds time and captures frames. We haven't
-tested that yet.
+### Using both at once
+
+They do combine: one Windows 98 VM runs the V9x agent, and an agent uses both
+MCP servers side by side. [examples/v9x](examples/v9x/) has the setup steps
+and `crossover.py`, which runs 17 crossover checks. All 17 behaved as
+expected.
+
+![Both MCP servers driving one Windows 98 VM](docs/images/v9x-crossover.gif)
+
+- **Works together:** V9x opens a file in Notepad and `find_memory` finds its
+  text in physical RAM. `type_text` types into a window and V9x saves and
+  fetches the file. `v9x_move` places the pointer, `mouse` moves it, and V9x
+  reads it back. `cdrom_insert(files=...)` builds a disc and V9x lists it.
+  `reset(kind="hard")` reboots and `v9x_wait_desktop` sees the new boot. The
+  two screenshots agree, except for the pointer.
+- **The catch is time.** V9x is a TCP server inside the guest. While
+  86box-mcp holds the machine, nothing in the guest runs, so V9x calls time
+  out. `release` while you use V9x, or send a V9x call while a `step` runs:
+  the call completes inside the step, and the machine stays held after it.
+- **Pace V9x calls.** The agent serves one client at a time, and calls sent
+  while the machine is held pile up. See
+  [pacing](examples/v9x/README.md#pacing-v9x-calls-around-held-time).
+- **Don't overlap:** 86box-mcp's disk tools need the VM stopped. Use
+  `v9x_put_file` while Windows runs, and `screen_text` only reads text modes.
 
 If you're on DOSBox rather than 86Box, look at
 [dosbox-mcp](https://github.com/dosbox-automation/dosbox-mcp), which pairs an

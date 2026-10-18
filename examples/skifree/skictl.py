@@ -1,8 +1,9 @@
 """Keep a Windows 3.11 VM with SkiFree running, and take Python snippets to run against it.
 
-    python skictl.py serve [--record DIR] [--vm DIR] [--dos] [--sock PATH]
+    python skictl.py serve [--record DIR] [--vm DIR] [--dos|--raw] [--sock PATH]
                                               # boots the VM, then listens on skictl.sock
-                                              # (--dos: stop at the DOS prompt, don't start Windows)
+                                              # (--dos: stop at the DOS prompt, don't start Windows;
+                                              #  --raw: just start the VM, held, and wait for nothing)
     python skictl.py run 'code...'            # runs code with m (a solbot Machine) in scope
 
 Snippets share one namespace across calls, so state (and helper functions) persist. Whatever a
@@ -42,13 +43,15 @@ def type_text(m: Machine, text: str) -> None:
         m.step(30)
 
 
-def boot(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False) -> Machine:
+def boot(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False, raw: bool = False) -> Machine:
     vm = VM(vm_dir)
     vm.start(held=True)
     m = Machine(vm)
     if record:
         Path(record).mkdir(parents=True, exist_ok=True)
         m.a.call(f"record start 50 {record}")
+    if raw:
+        return m
     m.a.wait_text("C:\\>", 60000)
     if dos:
         return m
@@ -68,8 +71,8 @@ PROGRESS_DIR = Path(os.environ["SKICTL_PROGRESS_DIR"]) if os.environ.get("SKICTL
 PROGRESS_EVERY_S = 180
 
 
-def serve(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False) -> None:
-    m = boot(record, vm_dir, dos)
+def serve(record: str | None, vm_dir: Path = VM_DIR, dos: bool = False, raw: bool = False) -> None:
+    m = boot(record, vm_dir, dos, raw)
     last = [0.0]
 
     def progress(force: bool = False) -> None:
@@ -137,7 +140,8 @@ if __name__ == "__main__":
     if opt("--sock"):
         SOCK = Path(opt("--sock"))
     if sys.argv[1] == "serve":
-        serve(opt("--record"), Path(opt("--vm")).expanduser() if opt("--vm") else VM_DIR, "--dos" in sys.argv)
+        serve(opt("--record"), Path(opt("--vm")).expanduser() if opt("--vm") else VM_DIR, "--dos" in sys.argv,
+              "--raw" in sys.argv)
     else:
         code = [a for a in sys.argv[2:] if a not in ("--sock", opt("--sock"))]
         run(code[0] if code else sys.stdin.read())
