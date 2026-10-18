@@ -602,7 +602,11 @@ This is an early release, built for developing our own DOS games and tools.
 - **No sound, in any form.** The guest's sound card is emulated (games play
   their music to 86Box), but nothing reaches you: no audio in recordings or
   videos, and no tool to capture, hear or check it.
-- **COM1 output only.** The guest can't read serial input yet. Capturing COM1
+- **Serial and parallel ports: COM1 output only.** The guest's writes to COM1
+  can be read (`serial_read`, `wait_for_serial`); nothing can be sent to it, and
+  COM2-4 and the LPT ports (printers, parallel-port devices) aren't reachable
+  from the server at all. 86Box's own port options (a file, a host serial
+  port, a named pipe) still work if set in `86box.cfg`. Capturing COM1
   (`vm_start(com1_log=True)`) is off by default. It used to look like it made
   runs occasionally non-reproducible (about 2 in 6). A likelier cause has since
   turned up: disk images that recorded the host's clock. With that fixed, 40 of
