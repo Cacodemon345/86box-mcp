@@ -141,6 +141,18 @@ class Automation:
     def release(self) -> dict:
         return self.call("release")
 
+    def fast_forward(self, on: bool | None = None) -> dict:
+        """Turn fast forward on or off (None: just report it). The reply's ff is the state now."""
+        return self.call("ff" if on is None else f"ff {'on' if on else 'off'}")
+
+    def quit_soft(self) -> dict:
+        """Press the machine's power button: ACPI, or the board's own, else a plain power-off."""
+        # Before 86Box#8382, any "quit ..." was a hard quit. #8384 (ff, which status reports) was
+        # merged after it, so a status with ff means quit soft is understood.
+        if "ff" not in self.status():
+            raise AutomationError("this 86Box predates 'quit soft' (86Box#8382); it would power off hard")
+        return self.call("quit soft")
+
     def step(self, ms: int) -> dict:
         return self.call(f"step {int(ms)}")
 

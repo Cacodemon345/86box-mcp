@@ -189,15 +189,27 @@ def vm_attach(endpoint: str, token: str | None = None) -> str:
 
 
 @mcp.tool()
-def vm_stop(power_off: bool = True) -> str:
+def vm_stop(power_off: bool = True, soft: bool = False, timeout_s: int = 60) -> str:
     """Power off the emulated machine and exit 86Box.
 
+    soft=True presses the power button instead, like 86Box's "Power off (soft)": the machine runs in
+    real time until the guest shuts itself down (an ACPI OS such as Windows 98 does), for up to
+    timeout_s seconds. If it hasn't by then, it's left running, released; call vm_stop again to cut
+    the power. A machine with no power button at all is just powered off.
     For a VM joined with vm_attach, power_off=False just disconnects and leaves it running.
     """
+    global _held
     from .vm import AttachedVM
 
     if _vm is None or not _vm.running():
         return "no VM running"
+    if soft and power_off:
+        stopped = _vm.power_off_soft(timeout_s)
+        _held = False
+        if not stopped:
+            return (f"pressed the power button, but 86Box is still running after {timeout_s}s; the machine "
+                    "is released. vm_stop() cuts the power")
+        return "powered off (soft); 86Box exited"
     if isinstance(_vm, AttachedVM):
         if not power_off:
             _vm.stop()
@@ -246,6 +258,18 @@ def release() -> str:
     v = vm()
     v.let_cpu_run()
     return _time_note(v.auto.release())
+
+
+@mcp.tool()
+def fast_forward(on: bool | None = None) -> str:
+    """Turn 86Box's fast forward on or off (on=None just reports it), as its menu does.
+
+    With it on, a released machine runs as fast as the host allows instead of in real time: good for
+    getting through a slow install or boot. A held machine is unaffected; its steps are already unpaced.
+    Released, tools that wait (press_keys, type_text) wait in host time, so more emulated time passes.
+    """
+    r = vm().auto.fast_forward(on)
+    return f"fast forward {'on' if r.get('ff') else 'off'}; {_time_note(r)}"
 
 
 @mcp.tool()
@@ -1106,7 +1130,11 @@ def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, l
 
 
 def main() -> None:
-    mcp.run()
+    httpport = os.environ.get('BOX86_MCP_HTTP_PORT', '0')
+    if httpport != '0':
+        mcp.run(transport="streamable-http", port=int(httpport))
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
