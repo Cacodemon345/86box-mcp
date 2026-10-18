@@ -144,6 +144,14 @@ def wait_real_time(what: str, check, limit_s: float = WALL_LIMIT_S, every: float
     raise Failed(f"timed out waiting for {what}{last}")
 
 
+def guest_file_size(v9x, path: str) -> int:
+    """The file's size, or 0 if it isn't there (yet). v9x_stat reports a missing file as text."""
+    try:
+        return int(json.loads(v9x.call("v9x_stat", {"guest_path": path})).get("size", 0))
+    except (ValueError, AttributeError):
+        return 0
+
+
 def alive(vm: VM) -> str:
     """'' if 86Box still answers; otherwise how it went quiet. A fatal() leaves it behind an error
     dialog: with 86Box#8392 it closes the automation socket first; before, it just stops
@@ -228,7 +236,7 @@ def run_once(label: str, binary: str, n: int, image: Path, work: Path, v9x, tpl)
         time.sleep(3)
         v9x.call("v9x_type", {"text": GUEST_PROJECT})
         v9x.call("v9x_key", {"keys": "ENTER"})
-        wait_real_time("the saved project", lambda: v9x.call("v9x_stat", {"guest_path": GUEST_PROJECT}))
+        wait_real_time("the saved project", lambda: guest_file_size(v9x, GUEST_PROJECT))
         r.phase = "export from the Result Browser"
         v9x.call("v9x_exec", {"application": f"{THREEDMARK}\\Result Browser.exe", "arguments": GUEST_PROJECT,
                               "working_dir": THREEDMARK, "detach": True})
@@ -238,7 +246,7 @@ def run_once(label: str, binary: str, n: int, image: Path, work: Path, v9x, tpl)
             time.sleep(2)
         v9x.call("v9x_type", {"text": GUEST_EXPORT})
         v9x.call("v9x_key", {"keys": "ENTER"})
-        wait_real_time("the exported results", lambda: v9x.call("v9x_stat", {"guest_path": GUEST_EXPORT}))
+        wait_real_time("the exported results", lambda: guest_file_size(v9x, GUEST_EXPORT))
         local = work / "results.txt"
         v9x.call("v9x_get_file", {"guest_path": GUEST_EXPORT, "local_path": str(local)})
         r.results = parse_export(local.read_bytes().decode("latin-1"))
@@ -259,6 +267,10 @@ def run_once(label: str, binary: str, n: int, image: Path, work: Path, v9x, tpl)
             pass
         vm.stop(timeout=10)
         (work / "hdd.img").unlink(missing_ok=True)
+        try:
+            shutil.copy(vm.log_path, work / "86box.log")    # e.g. VOODOO_WAIT_STATS, at exit
+        except OSError:
+            pass
     return r
 
 

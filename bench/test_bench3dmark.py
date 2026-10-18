@@ -4,10 +4,10 @@
 
 - Reliability: the build boots the image, runs the benchmark to the end and exports a score, with
   no hard reset on the way.
-- Fidelity: the results that are stable from run to run (baseline.json lists them; the overall
-  score isn't one) are within BENCH_TOLERANCE (default 5 %) of baseline.json. 3DMark measures
-  in emulated time, so these depend mostly on the emulation rather than the host: a change
-  means 86Box now emulates the machine's timing differently.
+- Fidelity: the results that depend only on the emulated machine (baseline.json lists them:
+  CPU 3DMarks) are within BENCH_TOLERANCE (default 2 %) of baseline.json. A change means 86Box
+  now emulates the CPU's timing differently. The Voodoo-bound results aren't checked: the
+  emulated Voodoo runs as fast as the host renders, so they measure the host (see README.md).
 - Performance: if BENCH_MIN_SPEED is set, the benchmark ran at least that fast, in emulated
   seconds per wall second, as a percentage. It depends on the host, so there is no default; take
   it from a run of a known-good build on the same machine.
@@ -59,7 +59,7 @@ def test_fidelity(run, test):
     assert run.ok, run.failure
     baseline = json.loads((HERE / "baseline.json").read_text())["results"][test]
     got = run.score(test)
-    tolerance = float(os.environ.get("BENCH_TOLERANCE", "5")) / 100
+    tolerance = float(os.environ.get("BENCH_TOLERANCE", "2")) / 100
     assert got is not None, f"no {test!r} in 3DMark's export"
     assert abs(got - baseline) <= tolerance * baseline, f"{test}: {got} against a baseline of {baseline}"
 

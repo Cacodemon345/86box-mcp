@@ -1,10 +1,6 @@
 {
- "about": "Medians of 3 runs of 86Box fff297459 (upstream master, 2026-10-17, new recompiler) with the image in README.md. Only results that stayed within 3 % of their median over 4 runs are checked. The overall score is not: it is bimodal (about 1,645 or 1,842) because Game 2 runs at 15.3 or 18.7 FPS from run to run. The rasterizer score (18,776 to 20,998), fill rate and 2 MB texture speed vary too much as well.",
+ "about": "Results that depend only on the emulated CPU, from 86Box fff297459 (upstream master, 2026-10-17). Synthetic CPU 3D Speed stayed within 0.2 % over 11 runs, across 1, 2 and 4 Voodoo render threads, the Voodoo recompiler on and off, and one host CPU or many. The Voodoo-bound results (the games, fill rate, bump mapping, the overall score) are not here: they follow how fast the host renders (see README.md).",
  "results": {
-  "Synthetic CPU 3D Speed": 2072,
-  "Game 1 - Race": 17.8,
-  "4MB Texture Rendering Speed": 8.0,
-  "Bump Mapping Emboss, 3-pass": 39.7,
-  "Bump Mapping Emboss, 2-pass": 45.1
+  "Synthetic CPU 3D Speed": 2068
  }
 }

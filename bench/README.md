@@ -20,10 +20,13 @@ sees exactly the same disk.
 |---|---|---|
 | **Reliability** | Every phase must finish: boot to the taskbar, the benchmark to its score, the export. No hard resets. A run that stops answering (an 86Box `fatal()`, a deadlock) fails with the last log line. | The build crashes or hangs on this workload. |
 | **Speed** | The boot and the benchmark run **held and unpaced**, stepping as fast as the host allows. Speed is emulated seconds per wall second, as a percentage. | The build got slower or faster. Real-time pacing would cap it at 100 % and hide this. |
-| **3DMark's results** | The overall score, CPU 3DMarks, rasterizer marks and every sub-test, from 3DMark's own text export. | The benchmark measures in emulated time, so its results reflect how 86Box emulates the hardware's timing. A changed result means the emulation changed. |
+| **CPU-bound results** | CPU 3DMarks, from 3DMark's own text export. 3DMark measures in emulated time, and this result depends only on the emulated CPU: within 0.2 % over 11 runs, whatever the host did. | 86Box now emulates the CPU's timing differently. |
+| **Voodoo-bound results** | The overall score, the two games, fill rate, bump mapping and texture tests. | **The host's Voodoo rendering got slower or faster.** The emulated Voodoo 2 has no speed of its own: it runs as fast as 86Box's render threads draw on the host (see [below](#the-emulated-voodoo-2-runs-at-the-hosts-speed)). |
 
-The speed numbers depend on the host. Compare builds on the same machine, in
-the same session, with nothing else heavy running.
+The speed numbers and the Voodoo-bound results depend on the host. Compare
+builds on the same machine, in the same session, with the same Voodoo
+settings and nothing else heavy running, and use `--runs 3` or more: the
+overall score varied by 12 % between runs of the same build.
 
 ## Results so far
 
@@ -35,18 +38,57 @@ trixie, Qt 6, Release):
 | Runs completed | 4 of 4 | 0 of 7 (2 of them with #8392): `fatal("Over limit!")` when the Result Browser starts |
 | Boot to the taskbar | 30 s emulated, at 138–143 % | 30 s emulated, at 121–125 % |
 | Benchmark | 314 s emulated in 313–325 s, at 97–100 % | 324–326 s emulated, at 76–82 % |
-| 3DMark score | 1,645, 1,842, 1,648, 1,659 | — |
+| 3DMark score | 1,639–1,842 (7 runs) | — |
 | CPU 3DMarks | 2,066–2,072 | — |
-| Game 1 – Race | 17.7–18.1 FPS | — |
-| Game 2 – First Person | 15.3, 18.7, 15.4, 15.6 FPS | — |
-| Rasterizer score | 18,776–20,998 (4 runs) | — |
-| Fill rate, multi-texturing | 3,883–4,046 MTexels/s | — |
+| Game 2 – First Person | 15.2–18.8 FPS | — |
+| Fill rate | 32.4–35.4 MTexels/s | — |
 
-Boot, benchmark and fill-rate figures for master are from three side-by-side
-runs, and for the old build from all seven; master's other results add a
-fourth run, from `pytest`. The old recompiler's build is about 20 % slower on
-this workload. Runs of the same build differ by a few percent in speed, and in
-3DMark's results as described below.
+Boot and benchmark figures for master are from three side-by-side runs, and
+for the old build from all seven. The old recompiler's build is about 20 %
+slower on this workload.
+
+## The emulated Voodoo 2 runs at the host's speed
+
+3DMark's Voodoo-bound results varied from run to run of the same build, so we
+changed only the host side of the emulated card, one run each, and kept the
+emulated machine identical:
+
+| | 2 render threads (stock, 2 runs) | 1 thread | 4 threads | Voodoo recompiler off | 1 host CPU for 86Box |
+|---|---|---|---|---|---|
+| CPU 3DMarks | 2,066 / 2,069 | 2,070 | 2,067 | 2,068 | 2,067 |
+| Fill rate (MTexels/s) | 35.4 / 33.8 | 15.8 | 63.5 | 9.3 | 36.2 |
+| Bump mapping, 3-pass (FPS) | 39.3 / 39.1 | 19.7 | 73.0 | 12.0 | 45.4 |
+| Game 1 (FPS) | 17.8 / 18.1 | 16.0 | 18.4 | 6.6 | 18.4 |
+| Game 2 (FPS) | 15.2 / 17.2 | 11.0 | 20.1 | 7.8 | 13.6 |
+| 3DMark score | 1,639 / 1,763 | 1,303 | 1,924 | 713 | 1,565 |
+
+- **Fill rate follows the host's render threads.** It roughly doubles with
+  each doubling of the threads, and falls to a quarter without the renderer's
+  recompiler. CPU 3DMarks stays within 0.2 % throughout. A real Voodoo 2
+  fills 90 Mpixels/s whatever the host; this one fills as fast as the host
+  draws, measured in emulated time.
+- **It leaks in through polling.** The card's status register (`SST_status`)
+  reports busy while the host's FIFO or render threads still have work.
+  Drivers poll it until the card is idle, and every poll costs emulated time.
+  86Box's wait statistics (`VOODOO_WAIT_STATS=1`) show that the other route,
+  the CPU blocking in wall time with emulated time stopped, was never taken
+  (zero FIFO-full, FIFO-empty and render waits) except six times with one host
+  CPU.
+- **The guest did exactly the same thing every time:** 3,490,344
+  framebuffer reads, 4,136 of them synchronised, in every run.
+- **With one host CPU the results stop making sense.** The CPU and render
+  threads take turns, rendering happens while emulated time stands still, and
+  the 2 MB texture test jumps to 1,488 FPS while the multi-texturing fill rate
+  drops to 49.
+- **The multi-texturing fill rate measures nothing useful:** 1,737–4,216
+  MTexels/s, unrelated to the thread count. A real card manages 180.
+
+So the Voodoo-bound results are a benchmark of 86Box's Voodoo **renderer** on
+the host, which is useful for A/B runs on the same machine, but not of the
+emulated card's fidelity. Making them faithful would mean giving the emulated
+card a speed in emulated time: busy until the pixels it was given would have
+taken a real Voodoo 2 to draw, with the CPU waiting in wall time only if the
+host falls behind that.
 
 ## Preparing the image
 
@@ -100,8 +142,8 @@ BENCH_IMAGE=... BENCH_BINARY=... V9X_REPO=... BENCH_MIN_SPEED=80 pytest bench/
 ```
 
 - `test_reliability`: the run finished, with no hard reset.
-- `test_fidelity`: the results that are stable from run to run are within
-  `BENCH_TOLERANCE` (default 5 %) of `baseline.json`.
+- `test_fidelity`: the CPU-bound results (CPU 3DMarks) are within
+  `BENCH_TOLERANCE` (default 2 %) of `baseline.json`.
 - `test_performance`: the benchmark ran at no less than `BENCH_MIN_SPEED` %
   (no default: it depends on the host).
 
@@ -118,18 +160,8 @@ BENCH_IMAGE=... BENCH_BINARY=... V9X_REPO=... BENCH_MIN_SPEED=80 pytest bench/
   only timeouts.
   [86Box#8392](https://github.com/86Box/86Box/pull/8392) closes the socket
   first. Tested on `2804cabd6`: the socket closes at once instead.
-- **Game 2 runs at one of two speeds.** Identical runs of the same build give
-  15.3 or 18.7 FPS in Game 2, and nothing in between, so the overall score is
-  about 1,645 or 1,842. 3DMark measures in emulated time, so something
-  outside it decides; our guess is the Voodoo's render threads, which run on
-  the host. CPU 3DMarks, Game 1 and bump mapping stay within 3 %.
-- **Multi-texturing is far too fast.** The multi-texturing fill rate comes out
-  at 3,900–4,000 MTexels/s, about 20 times a real Voodoo 2 (two texture units
-  at 90 MHz: 180). Single-texture fill rate, 32–34 MTexels/s, is below the
-  real card's 90. The emulated card's speed isn't modelled closely, in emulated
-  time.
-
-Because of the variation, `baseline.json` checks only the results that stay
-within 3 % from run to run (CPU 3DMarks, Game 1, 4 MB textures, bump
-mapping), and the report shows the median and range of several runs: use
-`--runs 3` or more to compare builds.
+- **The emulated Voodoo 2 has no speed of its own.** Its results follow the
+  host's rendering: twice the render threads, about twice the fill rate. See
+  [above](#the-emulated-voodoo-2-runs-at-the-hosts-speed). So `baseline.json`
+  checks only CPU 3DMarks, and the Voodoo-bound results are for comparing
+  renderer speed between builds on one host.

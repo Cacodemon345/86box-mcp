@@ -328,10 +328,10 @@ removal, it found:
   Browser starts, and runs the benchmark about 20 % slower.
 - On a fatal error the automation socket went silent instead of closing
   ([86Box#8392](https://github.com/86Box/86Box/pull/8392)).
-- Game 2 runs at one of two speeds from run to run, so the overall score is
-  about 1,645 or 1,842.
-- The emulated Voodoo 2 multi-textures about 20 times faster than the real
-  card.
+- The emulated Voodoo 2 has no speed of its own: it runs as fast as 86Box's
+  render threads draw on the host. Fill rate doubles with twice the threads,
+  while CPU 3DMarks stays within 0.2 %. So the Voodoo-bound results benchmark
+  86Box's renderer on the host, rather than the emulated card.
 
 See [bench/README.md](bench/README.md).
 
