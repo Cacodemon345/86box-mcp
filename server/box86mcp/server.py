@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import io
 import os
 import re
@@ -10,6 +11,7 @@ import time
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from . import disk
@@ -27,6 +29,33 @@ mcp = MCPServer(
         "over screenshot in text modes; it is cheaper and exact."
     ),
 )
+
+
+
+def tool():
+    """Register a function as an MCP tool. Whatever it raises reaches the client as the error's own
+    message: the MCP library passes on only a ToolError's text, and reports anything else as just
+    "Error executing tool X". The function itself is returned unchanged, so Python callers still
+    see the original exceptions."""
+    register = mcp.tool()
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except ToolError:
+                raise
+            except (AutomationError, ValueError, FileNotFoundError) as e:
+                raise ToolError(str(e)) from e
+            except Exception as e:      # still worth seeing: say what kind of failure it was
+                raise ToolError(f"{type(e).__name__}: {e}") from e
+
+        register(wrapper)
+        return fn
+
+    return decorate
+
 
 _vm: VM | None = None
 _held = True
@@ -72,7 +101,7 @@ def _time_note(info: dict) -> str:
 
 
 
-@mcp.tool()
+@tool()
 def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int = 63,
               config: str | None = None, nvr: str | None = None) -> str:
     """Create a VM in vm_dir with a blank hard disk, ready for installing an OS from floppy or CD.
@@ -95,7 +124,7 @@ def vm_create(vm_dir: str, cylinders: int = 993, heads: int = 16, sectors: int =
     return f"created {d} ({machine_of(d)}) with a blank {mb} MB disk ({cylinders}/{heads}/{sectors}); {cmos}"
 
 
-@mcp.tool()
+@tool()
 def dos_create_vm(vm_dir: str, base_image: str | None = None, cylinders: int = 993,
                   heads: int = 16, sectors: int = 63, autoexec: str = "@ECHO OFF\nPROMPT $P$G\n",
                   config: str | None = None, nvr: str | None = None) -> str:
@@ -124,7 +153,7 @@ def dos_create_vm(vm_dir: str, base_image: str | None = None, cylinders: int = 9
     return f"created {d} ({machine_of(d)}) with a {mb} MB DOS disk ({cylinders}/{heads}/{sectors}); {cmos}"
 
 
-@mcp.tool()
+@tool()
 def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None = None) -> str:
     """Copy host files/directories onto the VM's C: drive, e.g. dest_dir="\\GAME".
 
@@ -140,34 +169,63 @@ def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None
     return f"copied {', '.join(copied)} to C:{dest_dir}"
 
 
-@mcp.tool()
+def _state_file() -> Path:
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else os.environ.get("XDG_CACHE_HOME")
+    return Path(base or Path.home() / ".cache").expanduser() / "box86mcp" / "last_vm"
+
+
+def _remember_vm_dir(vm_dir: Path) -> None:
+    try:
+        f = _state_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(vm_dir) + "\n")
+    except OSError:
+        pass        # only a convenience
+
+
+def _default_vm_dir() -> str:
+    if _vm is not None and _vm.vm_dir is not None:
+        return str(_vm.vm_dir)
+    if os.environ.get("BOX86_VM_DIR"):
+        return os.environ["BOX86_VM_DIR"]
+    try:
+        last = _state_file().read_text().strip()
+        if last and (Path(last) / "86box.cfg").exists():
+            return last
+    except OSError:
+        pass
+    raise ValueError("no VM to start: pass vm_dir, a folder with an 86box.cfg (vm_create or dos_create_vm "
+                     "makes one), or set BOX86_VM_DIR")
+
+
+@tool()
 def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None = None, com1_log: bool = False,
              debugger: bool = False) -> str:
-    """Boot the 86Box machine whose 86box.cfg lives in vm_dir. vm_dir defaults to the last VM.
+    """Boot the 86Box machine whose 86box.cfg lives in vm_dir. Without vm_dir: the VM this session
+    last started, else $BOX86_VM_DIR, else the last VM started by any session.
 
     held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
     window=True shows the 86Box window on the host's display so a person can watch (and also type),
-    and window=False runs without one. By default the window shows on Windows, and not elsewhere. com1_log=True captures COM1 output for serial_read and
-    wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
+    and window=False runs without one. By default the window shows on Windows, and not elsewhere.
+    com1_log=True captures COM1 output for serial_read and wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
     -D GDBSTUB=ON.
     """
     global _vm, _held
+    if vm_dir is None:
+        vm_dir = _default_vm_dir()
     if _vm is not None and _vm.running():
         _vm.stop()
-    if vm_dir is None:
-        if _vm is None:
-            raise ValueError("pass vm_dir")
-        vm_dir = str(_vm.vm_dir)
     _vm = VM(vm_dir)
     status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
     _held = held
+    _remember_vm_dir(_vm.vm_dir)
     extras = (", windowed" if _vm.windowed else "") + (f", debugger on port {_vm.gdb_port}" if debugger else "")
     return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{extras}). Log: {_vm.log_path}"
 
 
-@mcp.tool()
+@tool()
 def vm_attach(endpoint: str, token: str | None = None) -> str:
     """Control an 86Box that is already running, possibly on another machine, instead of starting one.
 
@@ -189,7 +247,7 @@ def vm_attach(endpoint: str, token: str | None = None) -> str:
             f"{'held' if _held else 'running in real time'}, emulated t={status.get('ms')}ms")
 
 
-@mcp.tool()
+@tool()
 def vm_stop(power_off: bool = True, soft: bool = False, timeout_s: int = 60) -> str:
     """Power off the emulated machine and exit 86Box.
 
@@ -221,7 +279,7 @@ def vm_stop(power_off: bool = True, soft: bool = False, timeout_s: int = 60) -> 
     return "stopped"
 
 
-@mcp.tool()
+@tool()
 def vm_status() -> dict:
     """Emulated time, frame count, held state, video mode, and the tail of the 86Box log."""
     v = vm()
@@ -231,7 +289,7 @@ def vm_status() -> dict:
     return s
 
 
-@mcp.tool()
+@tool()
 def vm_info() -> dict:
     """What the running emulator actually is: 86Box version, machine, CPU and clock, RAM, video and
     sound cards, mounted disk/floppy/CD images, emulation speed, and resets so far.
@@ -243,7 +301,7 @@ def vm_info() -> dict:
     return vm().auto.info()
 
 
-@mcp.tool()
+@tool()
 def hold() -> str:
     """Freeze emulated time between tool calls (turn-based mode)."""
     global _held
@@ -251,7 +309,7 @@ def hold() -> str:
     return _time_note(vm().auto.hold())
 
 
-@mcp.tool()
+@tool()
 def release() -> str:
     """Let the machine run in real time between tool calls."""
     global _held
@@ -261,7 +319,7 @@ def release() -> str:
     return _time_note(v.auto.release())
 
 
-@mcp.tool()
+@tool()
 def fast_forward(on: bool | None = None) -> str:
     """Turn 86Box's fast forward on or off (on=None just reports it), as its menu does.
 
@@ -273,13 +331,13 @@ def fast_forward(on: bool | None = None) -> str:
     return f"fast forward {'on' if r.get('ff') else 'off'}; {_time_note(r)}"
 
 
-@mcp.tool()
+@tool()
 def step(ms: int) -> str:
     """Run exactly ms milliseconds of emulated time (as fast as the host allows), then hold again."""
     return _time_note(vm().auto.step(ms))
 
 
-@mcp.tool()
+@tool()
 def reset(kind: str = "hard") -> str:
     """Reset the machine: kind='hard' (power cycle) or 'cad' (Ctrl+Alt+Del)."""
     if kind not in ("hard", "cad"):
@@ -290,14 +348,14 @@ def reset(kind: str = "hard") -> str:
 # Screen --------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def screenshot(max_width: int = 640) -> list:
     """The current frame as an image, scaled down to max_width pixels wide (0 = native size)."""
     png, info = _snapshot(max_width)
     return [Image(data=png, format="png"), f"{info['w']}x{info['h']} native, {_time_note(info)}"]
 
 
-@mcp.tool()
+@tool()
 def screen_text() -> str:
     """The text-mode screen as plain text (CP437 decoded), with video mode and cursor position."""
     return vm().auto.text().render()
@@ -306,7 +364,7 @@ def screen_text() -> str:
 # Input ---------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def press_keys(keys: list[str], hold_ms: int = 60, gap_ms: int = 60) -> str:
     """Press keys or combos in sequence, e.g. ["enter"], ["ctrl+c"], ["up","up","space"], ["alt+f","x"].
 
@@ -338,14 +396,14 @@ def _type(text: str, ms_per_key: int) -> None:
         _advance(ms_per_key - ms_per_key // 2)
 
 
-@mcp.tool()
+@tool()
 def type_text(text: str, ms_per_key: int = 50) -> str:
     """Type text on the emulated keyboard (US layout). Use \\n for Enter."""
     _type(text, ms_per_key)
     return f"typed {len(text)} chars; {_time_note(vm().auto.status())}"
 
 
-@mcp.tool()
+@tool()
 def mouse(dx: int = 0, dy: int = 0, left: bool = False, right: bool = False, middle: bool = False,
           hold_ms: int = 30) -> str:
     """Move the mouse by (dx, dy) and set buttons, run hold_ms, then release the buttons."""
@@ -425,7 +483,7 @@ def _move_counts(dx: int, dy: int, buttons: int, slow: bool = False) -> None:
         _advance(wait)
 
 
-@mcp.tool()
+@tool()
 def mouse_drag(x1: int, y1: int, x2: int, y2: int, pointer_addr: int | None = None,
                hotspot: str = "top-left") -> str:
     """Drag with the left button from (x1, y1) to (x2, y2), e.g. a card, a window or an icon.
@@ -452,7 +510,7 @@ def mouse_drag(x1: int, y1: int, x2: int, y2: int, pointer_addr: int | None = No
     return f"dragged from ({x1},{y1}) to about ({x2},{y2}); gain {gx:.2f}x{gy:.2f} px/count"
 
 
-@mcp.tool()
+@tool()
 def mouse_to(x: int, y: int, pointer_addr: int | None = None, hotspot: str = "top-left",
              tolerance: int = 1, max_moves: int = 10) -> str:
     """Put the pointer at (x, y), closing the loop on where it actually lands.
@@ -537,7 +595,7 @@ def mouse_to(x: int, y: int, pointer_addr: int | None = None, hotspot: str = "to
             f"{moves} corrective moves")
 
 
-@mcp.tool()
+@tool()
 def act(hold_keys: list[str] | None = None, ms: int = 150, mouse_dx: int = 0, mouse_dy: int = 0,
         mouse_buttons: int = 0, max_width: int = 480) -> list:
     """Game-loop primitive: hold keys (and mouse) for ms of emulated time, release, return a screenshot.
@@ -561,7 +619,7 @@ def act(hold_keys: list[str] | None = None, ms: int = 150, mouse_dx: int = 0, mo
 # Waiting and DOS -----------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def wait_for_text(text: str, timeout_ms: int = 10000) -> str:
     """Run until text appears on one row of the text-mode screen, or timeout_ms of emulated time passes."""
     r = vm().auto.wait_text(text, timeout_ms)
@@ -571,7 +629,7 @@ def wait_for_text(text: str, timeout_ms: int = 10000) -> str:
 _PROMPT = re.compile(r"^[A-Z]:\\[^>]*>$")
 
 
-@mcp.tool()
+@tool()
 def dos_run(command: str, timeout_ms: int = 30000, poll_ms: int = 100) -> str:
     """Type a DOS command plus Enter, run until the command prompt returns, and return the screen text.
 
@@ -599,7 +657,7 @@ def dos_run(command: str, timeout_ms: int = 30000, poll_ms: int = 100) -> str:
 # Recording -----------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def record_start(directory: str, interval_ms: int = 100) -> str:
     """Record the screen: 86Box saves the displayed frame every interval_ms of emulated time into
     directory (one PNG per frame, named by emulated ms), whatever advances the clock.
@@ -613,7 +671,7 @@ def record_start(directory: str, interval_ms: int = 100) -> str:
     return f"recording every {interval_ms} ms of emulated time to {d}; {_time_note(r)}"
 
 
-@mcp.tool()
+@tool()
 def record_stop(video: str | None = None, calls_log: str | None = None, fast_factor: int = 8) -> str:
     """Stop recording. With video (.mp4 or .gif), render it: real speed around interactions, idle
     stretches fast-forwarded fast_factor times. calls_log is an optional JSONL of
@@ -644,7 +702,7 @@ def _last_record_dir() -> Path:
 # Serial --------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def serial_read(port: int = 1, from_start: bool = False) -> str:
     """Output the guest has written to a COM port since the last serial_read (from_start: since boot).
 
@@ -656,7 +714,7 @@ def serial_read(port: int = 1, from_start: bool = False) -> str:
     return text if text else "(no new output)"
 
 
-@mcp.tool()
+@tool()
 def wait_for_serial(text: str, port: int = 1, timeout_ms: int = 10000, poll_ms: int = 20) -> str:
     """Run until `text` appears in new COM port output, or timeout_ms of emulated time passes.
 
@@ -678,7 +736,7 @@ def wait_for_serial(text: str, port: int = 1, timeout_ms: int = 10000, poll_ms: 
 # Files ---------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool()
 def dos_put_floppy(paths: list[str], drive: str = "A") -> str:
     """Copy host files/directories onto a fresh 1.44 MB floppy image and insert it in drive A: or B:."""
     v = vm()
@@ -688,7 +746,7 @@ def dos_put_floppy(paths: list[str], drive: str = "A") -> str:
     return f"inserted floppy with {names} in {drive.upper()[0]}:"
 
 
-@mcp.tool()
+@tool()
 def floppy_insert(image: str, drive: str = "A", write_protect: bool = False) -> str:
     """Insert an existing floppy image (.img/.ima/.86f, ...) in drive A: or B:. Works for any guest.
 
@@ -705,14 +763,14 @@ def floppy_insert(image: str, drive: str = "A", write_protect: bool = False) -> 
     return f"inserted {path.name} in {drive.upper()[0]}:"
 
 
-@mcp.tool()
+@tool()
 def floppy_eject(drive: str = "A") -> str:
     """Eject the floppy from drive A: or B:."""
     vm().auto.call(f"fdd eject {0 if drive.upper().startswith('A') else 1}")
     return f"ejected {drive.upper()[0]}:"
 
 
-@mcp.tool()
+@tool()
 def cdrom_insert(image: str | None = None, files: list[str] | None = None, drive: int = 0) -> str:
     """Insert a CD in the emulated CD-ROM drive: an existing image (.iso/.cue) or a new ISO built
     from host files and directories (ISO 9660 8.3 names plus Joliet long names).
@@ -732,7 +790,7 @@ def cdrom_insert(image: str | None = None, files: list[str] | None = None, drive
     return f"inserted {mounted[0]} in CD-ROM drive {drive}"
 
 
-@mcp.tool()
+@tool()
 def cdrom_eject(drive: int = 0) -> str:
     """Eject the CD from an emulated CD-ROM drive."""
     vm().auto.call(f"cd eject {drive}")
@@ -766,7 +824,7 @@ def _span(start: int, end: int | None) -> tuple[int, int]:
     return start, end
 
 
-@mcp.tool()
+@tool()
 def read_memory(addr: int, length: int = 256) -> str:
     """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes, within the
     emulated RAM (vm_info reports mem_kb)."""
@@ -780,7 +838,7 @@ def read_memory(addr: int, length: int = 256) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tool()
 def write_memory(addr: int, hex_bytes: str) -> str:
     """Write bytes (hex string, e.g. "90 90 cc") to physical memory, within the emulated RAM."""
     data = bytes.fromhex(hex_bytes)
@@ -789,7 +847,7 @@ def write_memory(addr: int, hex_bytes: str) -> str:
     return f"wrote {len(data)} bytes at {addr:#x}"
 
 
-@mcp.tool()
+@tool()
 def wait_for_memory(addr: int, hex_bytes: str, timeout_ms: int = 10000) -> str:
     """Run until physical memory at addr equals hex_bytes, or timeout_ms of emulated time passes."""
     data = bytes.fromhex(hex_bytes)
@@ -811,7 +869,7 @@ def _pattern(hex_bytes: str | None, text: str | None, value: int | None, size: i
     return value.to_bytes(size, "little", signed=signed)
 
 
-@mcp.tool()
+@tool()
 def find_memory(hex_bytes: str | None = None, text: str | None = None, value: int | None = None,
                 size: int = 2, signed: bool = False, start: int = 0, end: int | None = None,
                 max_results: int = 50) -> str:
@@ -836,7 +894,7 @@ def find_memory(hex_bytes: str | None = None, text: str | None = None, value: in
 _snapshots: dict[str, dict] = {}
 
 
-@mcp.tool()
+@tool()
 def snapshot_memory(name: str = "default", start: int = 0, end: int | None = None) -> str:
     """Remember the contents of start..end (default: all emulated RAM), for diff_memory.
 
@@ -853,7 +911,7 @@ def _num(buf: bytes, off: int, size: int, signed: bool) -> int:
     return int.from_bytes(buf[off:off + size], "little", signed=signed)
 
 
-@mcp.tool()
+@tool()
 def diff_memory(change: str = "changed", name: str = "default", size: int = 1, signed: bool = False,
                 value: int | None = None, max_results: int = 50) -> str:
     """Compare memory with snapshot `name` and keep only the addresses that changed as described.
@@ -902,7 +960,7 @@ def diff_memory(change: str = "changed", name: str = "default", size: int = 1, s
     return f"{len(survivors)} addresses {change}{more}: " + " ".join(fmt(o) for o in shown)
 
 
-@mcp.tool()
+@tool()
 def registers() -> dict:
     """CPU registers at the current instruction boundary (sampled between 1 ms quanta)."""
     return vm().auto.regs()
@@ -957,7 +1015,7 @@ def _where(v: VM, g: Gdb) -> str:
     return f"{r['cs']:04x}:{r['eip']:08x} (linear {lin:#x}), bytes {code}"
 
 
-@mcp.tool()
+@tool()
 def breakpoint_set(addr: int, kind: str = "exec", length: int = 1, clear: bool = False) -> str:
     """Stop the CPU when it executes the instruction at addr, or when it writes, reads or accesses
     memory at addr..addr+length (kind "exec", "write", "read" or "access"). clear=True removes it.
@@ -987,7 +1045,7 @@ def _resume(v: VM, g: Gdb) -> None:
         v.gdb_stopped = False
 
 
-@mcp.tool()
+@tool()
 def debug_continue() -> str:
     """Let the CPU go on after a breakpoint or step_instructions, so step, press_keys, dos_run and
     the rest advance the machine again. Breakpoints stay set; a hit during another tool's call stops
@@ -998,7 +1056,7 @@ def debug_continue() -> str:
     return "the CPU runs again (held: time passes in tool calls)" if was else "the CPU wasn't stopped"
 
 
-@mcp.tool()
+@tool()
 def run_until_break(timeout_ms: int = 10000) -> str:
     """Run until a breakpoint or watchpoint stops the CPU, or timeout_ms of emulated time passes.
 
@@ -1016,7 +1074,7 @@ def run_until_break(timeout_ms: int = 10000) -> str:
     return f"{why} at {_where(v, g)}; emulated t={r['ms']}ms"
 
 
-@mcp.tool()
+@tool()
 def step_instructions(count: int = 1) -> str:
     """Execute count instructions (up to 200) one at a time, listing each address and its first bytes.
 
@@ -1043,7 +1101,7 @@ def _io_values(out: str) -> list[int]:
     return [int(x, 16) for line in out.splitlines() if ":" in line for x in line.split(":", 1)[1].split()]
 
 
-@mcp.tool()
+@tool()
 def io_read(port: int, width: int = 1, count: int = 1) -> str:
     """Read count values of width bytes (1, 2 or 4) from I/O port `port` upward, as the CPU's IN would.
 
@@ -1057,7 +1115,7 @@ def io_read(port: int, width: int = 1, count: int = 1) -> str:
     return f"port {port:#x}: " + " ".join(f"{x:#0{2 + 2 * width}x}" for x in vals)
 
 
-@mcp.tool()
+@tool()
 def io_write(port: int, value: int, width: int = 1) -> str:
     """Write value (width 1, 2 or 4 bytes) to I/O port `port`, as the CPU's OUT would.
 
@@ -1087,7 +1145,7 @@ def _pci_dwords(g: Gdb, bus: int, dev: int, fn: int, offsets: list[int]) -> list
     return out
 
 
-@mcp.tool()
+@tool()
 def pci_scan(bus: int = 0) -> str:
     """List the PCI functions on `bus`: address, vendor:device ID, class, and interrupt line/pin.
 
@@ -1112,7 +1170,7 @@ def pci_scan(bus: int = 0) -> str:
     return "\n".join(lines) or f"no PCI functions on bus {bus}"
 
 
-@mcp.tool()
+@tool()
 def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, length: int = 64) -> str:
     """Hex dump of a PCI function's configuration space, offset..offset+length (up to 256), as
     dwords. Needs vm_start(debugger=True)."""
