@@ -283,3 +283,19 @@ def test_copied_vm_with_a_network_card_starts(tmp_path):
         assert vm.auto.wait_text("C:\\>", 60000)["matched"]
     finally:
         vm.stop()
+
+
+def test_fast_forward_toggles_and_status_reports_it(dos_vm):
+    a = dos_vm.auto
+    assert a.status()["ff"] is False
+    assert a.fast_forward(True)["ff"] is True
+    assert a.fast_forward()["ff"] is True and a.status()["ff"] is True
+    r = a.step(100)  # still exact while held
+    assert r["held"] is True
+    assert a.fast_forward(False)["ff"] is False
+
+
+def test_soft_power_off_without_a_power_button(dos_vm):
+    # The 486 has neither ACPI nor a soft power button, so quit soft is a plain power-off.
+    assert dos_vm.power_off_soft(timeout=10)
+    assert not dos_vm.running()

@@ -341,8 +341,8 @@ These work with any guest OS:
 
 | Tool | What it does |
 |---|---|
-| `vm_create`, `vm_start`, `vm_stop`, `vm_status`, `vm_info` | New VM with a blank disk (512 MB CompactFlash geometry by default), as a 486DX2-66 or a copy of any `86box.cfg` you pass as `config`, with an optional saved CMOS (`nvr`); boot (held by default; `window=True` to watch); power off; status; machine, CPU, RAM, media, speed and reset counts (a triple fault shows up there) |
-| `hold`, `release`, `step(ms)` | Freeze time, run in real time, or run exactly *ms* of emulated time |
+| `vm_create`, `vm_start`, `vm_stop`, `vm_status`, `vm_info` | New VM with a blank disk (512 MB CompactFlash geometry by default), as a 486DX2-66 or a copy of any `86box.cfg` you pass as `config`, with an optional saved CMOS (`nvr`); boot (held by default; `window=True` to watch); power off, or press the power button and let the guest shut down (`soft=True`); status; machine, CPU, RAM, media, speed and reset counts (a triple fault shows up there) |
+| `hold`, `release`, `step(ms)`, `fast_forward` | Freeze time, run in real time, or run exactly *ms* of emulated time; `fast_forward(True)` lets a released machine run as fast as the host allows |
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
 | `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion; put the pointer at a screen position (closing the loop on where it lands); drag |

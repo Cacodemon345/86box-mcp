@@ -125,7 +125,15 @@ the devices use. `regs` reads `cpu_state`.
 **Media and reset.** `fdd load|eject` and `cd load|eject` copy what the UI's
 menu handlers do, including the status-bar icon update. `reset hard` calls
 `pc_reset_hard()`, `reset cad` calls `pc_send_cad()`, and `quit` replies and
-then calls `plat_power_off()`.
+then calls `plat_power_off()`. `quit soft` presses the power button instead:
+ACPI's if the machine has it, else the board's own, else it powers off as
+`quit` does. The guest only sees the button while the CPU runs, so the client
+releases the machine right after pressing it.
+
+**Fast forward.** `ff on|off` calls `plat_fast_forward()`, which sets the
+same `fast_forward` the menu toggles (the main-loop test above) and keeps the
+menu's check in step. It only matters when the machine is released: held
+steps are unpaced already.
 
 **`info`** reports the machine, CPU, memory, video, sound, disks, media and
 reset counts. It also gives emulation speed, measured over each emulated

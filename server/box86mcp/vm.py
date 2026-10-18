@@ -442,6 +442,28 @@ class VM:
             else:
                 f.unlink(missing_ok=True)
 
+    def power_off_soft(self, timeout: float = 60.0) -> bool:
+        """Press the power button and let the guest shut itself down, in real time. True once 86Box
+        has exited (and stop() has tidied up); False if it's still running after timeout seconds,
+        released, because the guest ignored the button or hasn't finished."""
+        self.auto.quit_soft()
+        try:
+            self.let_cpu_run()
+            self.auto.release()  # the press is latched; the guest sees it once the CPU runs
+        except (AutomationError, OSError):
+            pass  # no button: 86Box is already powering off
+        if not self._wait_exit(timeout):
+            return False
+        self.stop()
+        return True
+
+    def _wait_exit(self, timeout: float) -> bool:
+        try:
+            self.proc.wait(timeout)
+            return True
+        except subprocess.TimeoutExpired:
+            return False
+
     def mem_bytes(self) -> int:
         """Emulated RAM in bytes, from 86Box's own report (cached; RAM can't change while it runs)."""
         if getattr(self, "_mem_bytes", None) is None:
@@ -595,6 +617,17 @@ class AttachedVM(VM):
         except (AutomationError, OSError):
             pass  # it may close the connection as it exits
         self.auto.close()
+
+    def _wait_exit(self, timeout: float) -> bool:
+        # No process to wait for: 86Box has gone when the connection fails.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self.auto.status()
+            except (AutomationError, OSError):
+                return True
+            time.sleep(0.2)
+        return False
 
     def hdd_image(self) -> Path:
         raise RuntimeError("the disk image of an attached VM is on the other machine")
