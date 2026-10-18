@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import io
 import os
 import re
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -38,25 +40,77 @@ mcp = MCPServer(
 
 
 
+class _VMState:
+    """What the tools keep about one VM. The selected VM's state lives in the module globals below,
+    which every tool uses; _select() swaps another VM's in."""
+
+    def __init__(self):
+        self.vm: VM | None = None
+        self.held = True
+        self.mouse_state: dict = {}
+        self.record_dirs: list[Path] = []
+        self.snapshots: dict[str, dict] = {}
+
+
+_vms: dict[str, _VMState] = {}          # by name; "main" unless a tool names another
+_current = "main"
+_lock = threading.RLock()               # one tool call at a time: the globals belong to one VM
+
+
+def _save_current() -> None:
+    st = _vms.setdefault(_current, _VMState())
+    st.vm, st.held, st.mouse_state, st.record_dirs, st.snapshots = (
+        _vm, _held, _mouse_state, _record_dirs, _snapshots)
+
+
+def _select(name: str) -> None:
+    global _current, _vm, _held, _mouse_state, _record_dirs, _snapshots
+    if name == _current:
+        return
+    _save_current()
+    st = _vms.setdefault(name, _VMState())
+    _current = name
+    _vm, _held, _mouse_state, _record_dirs, _snapshots = (
+        st.vm, st.held, st.mouse_state, st.record_dirs, st.snapshots)
+
+
+VM_PARAM_DOC = ("\n\nvm: which VM, by name, when the server runs more than one (vm_start(vm=\"p2\", ...) starts "
+                "one called p2). By default the one last named; \"main\" if none has been.")
+
+
 def tool():
-    """Register a function as an MCP tool. Whatever it raises reaches the client as the error's own
-    message: the MCP library passes on only a ToolError's text, and reports anything else as just
-    "Error executing tool X". The function itself is returned unchanged, so Python callers still
-    see the original exceptions."""
+    """Register a function as an MCP tool, with an optional vm argument that picks the VM it acts on.
+
+    Whatever the tool raises reaches the client as the error's own message: the MCP library passes on
+    only a ToolError's text, and reports anything else as just "Error executing tool X". The function
+    itself is returned unchanged, so Python callers still use the selected VM and see the original
+    exceptions."""
     register = mcp.tool()
 
     def decorate(fn):
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            try:
-                return fn(*args, **kwargs)
-            except ToolError:
-                raise
-            except (AutomationError, ValueError, FileNotFoundError) as e:
-                raise ToolError(str(e)) from e
-            except Exception as e:      # still worth seeing: say what kind of failure it was
-                raise ToolError(f"{type(e).__name__}: {e}") from e
+        sig = inspect.signature(fn, eval_str=True)
 
+        @functools.wraps(fn)
+        def wrapper(*args, vm: str | None = None, **kwargs):
+            with _lock:
+                try:
+                    if vm is not None:
+                        _select(vm)
+                    return fn(*args, **kwargs)
+                except ToolError:
+                    raise
+                except (AutomationError, ValueError, FileNotFoundError) as e:
+                    raise ToolError(str(e)) from e
+                except Exception as e:      # still worth seeing: say what kind of failure it was
+                    raise ToolError(f"{type(e).__name__}: {e}") from e
+                finally:
+                    _save_current()
+
+        if "vm" not in sig.parameters:
+            wrapper.__signature__ = sig.replace(parameters=[
+                *sig.parameters.values(),
+                inspect.Parameter("vm", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None)])
+            wrapper.__doc__ = (fn.__doc__ or "") + VM_PARAM_DOC
         register(wrapper)
         return fn
 
@@ -337,6 +391,110 @@ def vm_info() -> dict:
     usually means a crash. speed_percent is measured while running; 100 = real time.
     """
     return vm().auto.info()
+
+
+def _running_states() -> list[tuple[str, _VMState]]:
+    _save_current()
+    return [(n, st) for n, st in _vms.items() if st.vm is not None and st.vm.running()]
+
+
+def _set_held(name: str, st: _VMState, held: bool) -> None:
+    global _held
+    st.held = held
+    if name == _current:
+        _held = held
+
+
+def _align(states) -> dict[str, int]:
+    """Hold every VM, then step the ones behind up to the one furthest along. Returns the times."""
+    for name, st in states:
+        st.vm.auto.hold()
+        _set_held(name, st, True)
+    ms = {name: st.vm.auto.status()["ms"] for name, st in states}
+    lead = max(ms.values())
+    for name, st in states:
+        if ms[name] < lead:
+            st.vm.auto.step(lead - ms[name])
+    return {name: st.vm.auto.status()["ms"] for name, st in states}
+
+
+@tool()
+def vm_list() -> list[dict]:
+    """The VMs this server knows: name, folder, 86Box binary, running, held, emulated time. The one
+    marked current is the one tools act on without a vm argument."""
+    _save_current()
+    out = []
+    for name, st in _vms.items():
+        v = st.vm
+        if v is None:
+            continue                    # a name that never had a VM
+        running = v.running()
+        out.append({"name": name, "current": name == _current, "running": running,
+                    "vm_dir": str(v.vm_dir) if v.vm_dir else None,
+                    "binary": str(v.binary) if hasattr(v, "binary") else None,
+                    "held": st.held if running else None,
+                    "ms": v.auto.status()["ms"] if running else None})
+    return out
+
+
+@tool()
+def step_all(ms: int, quantum_ms: int = 1) -> str:
+    """Run every running VM ms of emulated time in lockstep, for multiplayer between VMs.
+
+    All VMs are held first, and any behind the furthest along are stepped up to it. Then they all run
+    quantum_ms (default 1) at a time, in parallel, waiting for every VM after each quantum, so their
+    clocks never drift apart by more than one quantum. Packets between them (86Box's network switch)
+    travel in host time, so an exchange lands within a quantum of when it was sent: close, but not
+    bit-for-bit repeatable the way one held VM is. Smaller quanta are closer and slower.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if ms <= 0 or quantum_ms <= 0:
+        raise ValueError("ms and quantum_ms must be positive")
+    states = _running_states()
+    if not states:
+        raise AutomationError("no VM running; call vm_start first")
+    t0 = time.monotonic()
+    start = _align(states)
+    rounds, rest = divmod(ms, quantum_ms)
+    with ThreadPoolExecutor(len(states)) as pool:
+        for q in [quantum_ms] * rounds + ([rest] if rest else []):
+            list(pool.map(lambda nst: nst[1].vm.auto.step(q), states))
+    end = {name: st.vm.auto.status()["ms"] for name, st in states}
+    wall = time.monotonic() - t0
+    times = ", ".join(f"{n} t={end[n]}ms" for n in end)
+    return (f"{len(states)} VMs ran {ms} ms in lockstep ({quantum_ms} ms quanta), in {wall:.1f} s wall; "
+            f"started at t={max(start.values())}ms; now {times}")
+
+
+@tool()
+def hold_all() -> str:
+    """Hold every running VM, and bring them to the same emulated time."""
+    states = _running_states()
+    if not states:
+        raise AutomationError("no VM running; call vm_start first")
+    at = _align(states)
+    return f"held {len(states)} VMs at t={max(at.values())}ms"
+
+
+@tool()
+def release_all(align: bool = True) -> str:
+    """Let every running VM run in real time, released together. With align (default), they are
+    first brought to the same emulated time, so they start out level; each then paces itself to real
+    time, and measure_speed(vm=...) shows one that falls behind."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    states = _running_states()
+    if not states:
+        raise AutomationError("no VM running; call vm_start first")
+    at = _align(states) if align else {}
+    for _, st in states:
+        st.vm.let_cpu_run()
+    with ThreadPoolExecutor(len(states)) as pool:
+        list(pool.map(lambda nst: nst[1].vm.auto.release(), states))
+    for name, st in states:
+        _set_held(name, st, False)
+    return f"released {len(states)} VMs" + (f" from t={max(at.values())}ms" if at else "")
 
 
 @tool()
