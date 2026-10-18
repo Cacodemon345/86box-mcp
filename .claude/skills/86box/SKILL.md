@@ -45,8 +45,10 @@ the cases above, and say why.
 - **Graphics:** `screenshot`. Compare frames rather than guessing from one.
 - **Keyboard:** `type_text("dir\n")`, `press_keys(["ctrl", "alt", "del"])`, or `act(hold_keys, ms)`
   to hold keys for an exact time and get the frame at the end: one turn of a real-time game.
-- **Mouse:** relative (`mouse(dx, dy)`). `mouse_to(x, y)` closes the loop by finding the pointer on
-  screen, or in memory if the program publishes it; `mouse_drag` for drags.
+- **Mouse:** relative (`mouse(dx, dy)`); `mouse(left=True, release=False)` keeps the button down
+  (a dropdown that picks on release), and the next `mouse` call lets go. `mouse_to(x, y)` closes the
+  loop by finding the pointer on screen, or in memory if the program publishes it; `mouse_drag` for
+  drags. The hotspot is the pointer's tip (top-left of an arrow or a pointing finger).
 - **DOS:** `dos_run("command")` types it and waits for the prompt. `dos_install_files` copies onto C:
   while the VM is stopped; `dos_put_floppy` or `cdrom_insert(files=[...])` while it runs.
 
@@ -87,6 +89,17 @@ While the debugger has the CPU stopped, tools that need time fail, saying so: ca
 (or `run_until_break`) first. A breakpoint hit during another tool's call stops the CPU, and that
 call reports where.
 
+**Multiplayer, or several VMs.** Name each VM: `vm_start(vm="p1", vm_dir=...)`, then `vm="p1"` on
+any tool. Held VMs in a group step together: any tool that passes time on one (`step`, `mouse`,
+`mouse_to`, `press_keys`, `wait_for_text`...) passes the same time on all, in 10 ms lockstep quanta,
+so a networked game never sees a peer freeze and drop it. Every VM starts in group "default"; put
+an unrelated VM in its own group (`vm_group("solo", vm=...)` or `vm_start(group=...)`) so it runs
+independently. `step_all(ms)` runs the group with no input; `vm_list` shows each VM's time. For a
+side-by-side video, `record_start` on each, then `record_stop_all(video=..., speed=["0:4",
+"75000:1"])`: frames are paired by emulated time, with the clock shown. For 86Box's network switch,
+give the VMs `net_01_net_type = nlswitch` with one `net_01_secret`, and no `mac` lines (copied VMs
+would share a MAC).
+
 **Work with V9x Remote Agent (Windows 9x).** V9x runs inside the guest and needs emulated time to
 pass. `release` before V9x calls, or send them while a `step` runs. No more than 4 V9x calls at
 once. After V9x calls have timed out while the machine was held, ping until it answers before
@@ -99,5 +112,7 @@ media and resets.
 - The disk tools (`dos_install_files`, `dos_create_vm`) need the VM stopped.
 - Held means nothing in the guest runs between calls: no network replies, no background programs.
   If something "hangs", check whether you are waiting on the guest while it's held.
-- Mouse movement is relative, and guests accelerate it: use `mouse_to` for positions.
-- Each server runs one VM; a new `vm_start` stops the previous one.
+- Mouse movement is relative, and guests accelerate it: use `mouse_to` for positions. But
+  `mouse_to` first parks the pointer in a corner, which scrolls the map in an RTS or turns the view
+  in a 3D game: there, nudge with `mouse(dx, dy)` and check with a screenshot.
+- A new `vm_start` for a VM name stops that VM's previous machine; other names are unaffected.

@@ -293,6 +293,17 @@ Two lessons from getting it going:
 - **The keys:** the game only reads the keypad keys, not the extended arrow
   keys.
 
+#### Warcraft II over IPX: two VMs in lockstep
+
+![Two 86Box VMs playing Warcraft II against each other](docs/images/warcraft2-lockstep.gif)
+
+Two DOS machines in one server, linked by 86Box's network switch, play
+Warcraft II over IPX. Alpha's peon walks to Bravo's base and kills Bravo's
+peasant. Both machines are held, and every tool call that passes time on one
+passes the same time on the other, 10 ms at a time, so neither game sees its
+peer stall. `record_stop_all` rendered the video, with both screens on their
+shared emulated clock. See [`examples/warcraft2`](examples/warcraft2).
+
 ### Development and testing
 
 #### A demo game with readable memory state
@@ -390,7 +401,8 @@ These work with any guest OS:
 | `measure_speed(seconds, paced)` | Emulated seconds per wall second: paced (does it keep up with real time?) or unpaced (throughput, to compare 86Box builds, each started with `vm_start(binary=...)`) |
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
-| `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion; put the pointer at a screen position (closing the loop on where it lands); drag |
+| `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion, with buttons (`release=False` keeps them down); put the pointer at a screen position (closing the loop on where it lands); drag |
+| `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock |
 | `screenshot`, `screen_text`, `wait_for_text` | The frame; text-mode screen as text; run until text appears |
 | `read_memory`, `write_memory`, `wait_for_memory`, `registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`), and CPU registers |
 | `find_memory`, `snapshot_memory`, `diff_memory` | Search memory for bytes, text or a number; snapshot it, then keep only the addresses that changed the way you expect (increased, decreased, equal to a value) to find a game's variables |

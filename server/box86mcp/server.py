@@ -34,7 +34,11 @@ mcp = MCPServer(
         "measure_speed reports emulated speed: paced (does it keep up with real time?) or unpaced (raw "
         "throughput, for comparing builds). vm_start(binary=...) picks the 86Box executable for that start, "
         "so one session can compare builds. Prefer screen_text over screenshot in text modes; it is cheaper "
-        "and exact. A failing tool says why."
+        "and exact. A failing tool says why. Several VMs: name them with vm=... on any tool. Held VMs are "
+        "linked in groups (all in \"default\" unless vm_group/vm_start(group=) says otherwise): time "
+        "passing on one (any tool) passes on every held VM of its group, in 10 ms lockstep quanta, so "
+        "networked guests stay in step. step_all runs a group; record_stop_all renders its recordings "
+        "side by side on the shared clock."
     ),
 )
 
@@ -55,6 +59,12 @@ class _VMState:
 _vms: dict[str, _VMState] = {}          # by name; "main" unless a tool names another
 _current = "main"
 _lock = threading.RLock()               # one tool call at a time: the globals belong to one VM
+_groups: dict[str, str] = {}            # VM name -> its group; held VMs in a group step together
+_quantum_ms = 10                        # their lockstep quantum
+
+
+def _group_of(name: str) -> str:
+    return _groups.get(name, "default")
 
 
 def _save_current() -> None:
@@ -132,9 +142,18 @@ def _advance(ms: int) -> None:
     if ms <= 0:
         return
     if _held:
-        vm().auto.step(ms)
+        _step(ms)
     else:
         time.sleep(ms / 1000)
+
+
+def _step(ms: int) -> dict:
+    """Step the selected VM ms, and every other held VM in its group with it, in lockstep."""
+    states = [(n, st) for n, st in _group_states(_group_of(_current)) if st.held]
+    if len(states) > 1 and any(n == _current for n, _ in states):
+        _run_in_lockstep(states, ms, _quantum_ms)
+        return vm().auto.status()
+    return vm().auto.step(ms)
 
 
 def _snapshot(max_width: int) -> tuple[bytes, dict]:
@@ -284,7 +303,7 @@ def _default_vm_dir() -> str:
 
 @tool()
 def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None = None, com1_log: bool = False,
-             debugger: bool = False, binary: str | None = None) -> str:
+             debugger: bool = False, binary: str | None = None, group: str | None = None) -> str:
     """Boot the 86Box machine whose 86box.cfg lives in vm_dir. Without vm_dir: the VM this session
     last started, else $BOX86_VM_DIR, else the last VM started by any session.
 
@@ -299,8 +318,12 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
     or a CMake build folder or 86Box checkout to find it in (build/src/86Box, for a worktree). Paths
     are absolute, or relative to the server's working directory. It sticks for the rest of the session; by default $BOX86_BINARY. To compare or
     bisect builds: vm_start(binary=A), measure, vm_stop, then binary=B.
+    group: the lockstep group (see vm_group); by default the VM's earlier one, else "default", so
+    VMs started together step together.
     """
     global _vm, _held
+    if group is not None:
+        _groups[_current] = group
     if vm_dir is None:
         vm_dir = _default_vm_dir()
     if _vm is not None and _vm.running():
@@ -398,6 +421,12 @@ def _running_states() -> list[tuple[str, _VMState]]:
     return [(n, st) for n, st in _vms.items() if st.vm is not None and st.vm.running()]
 
 
+def _group_states(group: str | None) -> list[tuple[str, _VMState]]:
+    """The running VMs of a group; None: the current VM's group."""
+    group = _group_of(_current) if group is None else group
+    return [(n, st) for n, st in _running_states() if _group_of(n) == group]
+
+
 def _set_held(name: str, st: _VMState, held: bool) -> None:
     global _held
     st.held = held
@@ -420,8 +449,8 @@ def _align(states) -> dict[str, int]:
 
 @tool()
 def vm_list() -> list[dict]:
-    """The VMs this server knows: name, folder, 86Box binary, running, held, emulated time. The one
-    marked current is the one tools act on without a vm argument."""
+    """The VMs this server knows: name, group, folder, 86Box binary, running, held, emulated time.
+    The one marked current is the one tools act on without a vm argument."""
     _save_current()
     out = []
     for name, st in _vms.items():
@@ -429,7 +458,7 @@ def vm_list() -> list[dict]:
         if v is None:
             continue                    # a name that never had a VM
         running = v.running()
-        out.append({"name": name, "current": name == _current, "running": running,
+        out.append({"name": name, "group": _group_of(name), "current": name == _current, "running": running,
                     "vm_dir": str(v.vm_dir) if v.vm_dir else None,
                     "binary": str(v.binary) if hasattr(v, "binary") else None,
                     "held": st.held if running else None,
@@ -438,28 +467,24 @@ def vm_list() -> list[dict]:
 
 
 @tool()
-def step_all(ms: int, quantum_ms: int = 1) -> str:
-    """Run every running VM ms of emulated time in lockstep, for multiplayer between VMs.
+def step_all(ms: int, quantum_ms: int | None = None, group: str | None = None) -> str:
+    """Run every running VM of a group ms of emulated time in lockstep, for multiplayer between VMs.
 
-    All VMs are held first, and any behind the furthest along are stepped up to it. Then they all run
-    quantum_ms (default 1) at a time, in parallel, waiting for every VM after each quantum, so their
-    clocks never drift apart by more than one quantum. Packets between them (86Box's network switch)
-    travel in host time, so an exchange lands within a quantum of when it was sent: close, but not
-    bit-for-bit repeatable the way one held VM is. Smaller quanta are closer and slower.
+    group: by default the current VM's ("default" unless vm_group or vm_start put it in another).
+    All of them are held first, and any behind the furthest along are stepped up to it. Then they all
+    run quantum_ms (default the group quantum, 10 ms) at a time, in parallel, waiting for every VM
+    after each quantum, so their clocks never drift apart by more than one quantum. Packets between
+    them (86Box's network switch) travel in host time, so an exchange lands within a quantum of when
+    it was sent: close, but not bit-for-bit repeatable the way one held VM is. Smaller quanta are
+    closer and slower. Other tools step a group together too; this is the one that needs no input.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
+    quantum_ms = quantum_ms or _quantum_ms
     if ms <= 0 or quantum_ms <= 0:
         raise ValueError("ms and quantum_ms must be positive")
-    states = _running_states()
-    if not states:
-        raise AutomationError("no VM running; call vm_start first")
+    states = _states_or_fail(group)
     t0 = time.monotonic()
     start = _align(states)
-    rounds, rest = divmod(ms, quantum_ms)
-    with ThreadPoolExecutor(len(states)) as pool:
-        for q in [quantum_ms] * rounds + ([rest] if rest else []):
-            list(pool.map(lambda nst: nst[1].vm.auto.step(q), states))
+    _run_in_lockstep(states, ms, quantum_ms)
     end = {name: st.vm.auto.status()["ms"] for name, st in states}
     wall = time.monotonic() - t0
     times = ", ".join(f"{n} t={end[n]}ms" for n in end)
@@ -467,26 +492,65 @@ def step_all(ms: int, quantum_ms: int = 1) -> str:
             f"started at t={max(start.values())}ms; now {times}")
 
 
-@tool()
-def hold_all() -> str:
-    """Hold every running VM, and bring them to the same emulated time."""
-    states = _running_states()
+def _states_or_fail(group: str | None) -> list[tuple[str, _VMState]]:
+    states = _group_states(group)
     if not states:
-        raise AutomationError("no VM running; call vm_start first")
+        raise AutomationError(f"no VM running in group {group or _group_of(_current)!r}; call vm_start first")
+    return states
+
+
+def _run_in_lockstep(states, ms: int, quantum_ms: int) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    rounds, rest = divmod(ms, quantum_ms)
+    with ThreadPoolExecutor(len(states)) as pool:
+        for q in [quantum_ms] * rounds + ([rest] if rest else []):
+            list(pool.map(lambda nst: nst[1].vm.auto.step(q), states))
+
+
+@tool()
+def vm_group(group: str | None = None, quantum_ms: int | None = None) -> str:
+    """Put the current VM in a group (group=None just reports), or set the lockstep quantum.
+
+    Held VMs in one group step together: any tool that lets held time pass on one of them (step,
+    mouse, mouse_to, press_keys, wait_for_text...) steps them all, quantum_ms at a time, so a
+    multiplayer game sees its peers keep up rather than dropping one that froze while another got
+    input. Every VM starts in "default", so by default they all step together. A VM in a group of its
+    own runs independently: its time passes only in its own tool calls. Joining a group brings the
+    VM to the group's emulated time. quantum_ms (default 10) applies to every group.
+    """
+    global _quantum_ms
+    if quantum_ms is not None:
+        if quantum_ms <= 0:
+            raise ValueError("quantum_ms must be positive")
+        _quantum_ms = quantum_ms
+    if group is not None:
+        _groups[_current] = group
+        held = [(n, st) for n, st in _group_states(group) if st.held]
+        if len(held) > 1:
+            _align(held)
+    g = _group_of(_current)
+    members = [n for n, _ in _group_states(g)]
+    return f"{_current} is in group {g!r} with {', '.join(members) or 'no running VMs'}; quantum {_quantum_ms} ms"
+
+
+@tool()
+def hold_all(group: str | None = None) -> str:
+    """Hold every running VM of a group (default: the current VM's), at the same emulated time."""
+    states = _states_or_fail(group)
     at = _align(states)
     return f"held {len(states)} VMs at t={max(at.values())}ms"
 
 
 @tool()
-def release_all(align: bool = True) -> str:
-    """Let every running VM run in real time, released together. With align (default), they are
-    first brought to the same emulated time, so they start out level; each then paces itself to real
-    time, and measure_speed(vm=...) shows one that falls behind."""
+def release_all(align: bool = True, group: str | None = None) -> str:
+    """Let every running VM of a group (default: the current VM's) run in real time, released
+    together. With align (default), they are first brought to the same emulated time, so they start
+    out level; each then paces itself to real time, and measure_speed(vm=...) shows one that falls
+    behind."""
     from concurrent.futures import ThreadPoolExecutor
 
-    states = _running_states()
-    if not states:
-        raise AutomationError("no VM running; call vm_start first")
+    states = _states_or_fail(group)
     at = _align(states) if align else {}
     for _, st in states:
         st.vm.let_cpu_run()
@@ -570,7 +634,7 @@ def fast_forward(on: bool | None = None) -> str:
 @tool()
 def step(ms: int) -> str:
     """Run exactly ms milliseconds of emulated time (as fast as the host allows), then hold again."""
-    return _time_note(vm().auto.step(ms))
+    return _time_note(_step(ms))
 
 
 @tool()
@@ -641,13 +705,16 @@ def type_text(text: str, ms_per_key: int = 50) -> str:
 
 @tool()
 def mouse(dx: int = 0, dy: int = 0, left: bool = False, right: bool = False, middle: bool = False,
-          hold_ms: int = 30) -> str:
-    """Move the mouse by (dx, dy) and set buttons, run hold_ms, then release the buttons."""
+          hold_ms: int = 30, release: bool = True) -> str:
+    """Move the mouse by (dx, dy) and set buttons, run hold_ms, then release the buttons.
+    release=False leaves the buttons down (held in place, e.g. a dropdown that picks on release, or
+    a fire button); the next mouse call sets them again, so call with no buttons to let go. For a
+    drag between two points, use mouse_drag."""
     v = vm()
     buttons = (1 if left else 0) | (2 if right else 0) | (4 if middle else 0)
     v.auto.mouse(dx, dy, buttons)
     _advance(hold_ms)
-    if buttons:
+    if buttons and release:
         v.auto.mouse(0, 0, 0)
         _advance(hold_ms)
     return _time_note(v.auto.status())
@@ -923,6 +990,32 @@ def record_stop(video: str | None = None, calls_log: str | None = None, fast_fac
         render_timeline(frames, Path(video).expanduser(), Path(calls_log).expanduser() if calls_log else None,
                         fast_factor=fast_factor)
         msg += f"; rendered {video}"
+    return msg
+
+
+@tool()
+def record_stop_all(video: str | None = None, speed: list[str] | None = None, labels: dict[str, str] | None = None,
+                    group: str | None = None) -> str:
+    """Stop recording on every VM of a group (default: the current VM's) and, with video (.mp4), render
+    their recordings side by side on the shared emulated clock: two VMs next to each other, up to
+    four 2x2, up to eight 4x2, each labelled, with the emulated time on top. Each VM's frames are all
+    its recordings this session (record_start again to go on in a new directory), from the time all
+    of them were recording to when the first stopped.
+
+    speed: stretches of emulated time and how much faster than real time to play them, as
+    "from_ms:factor", e.g. ["0:4", "75000:1"] plays boot at 4x and the rest at real speed (default
+    real speed throughout; the factor shows next to the clock). labels: {vm name: caption}.
+    """
+    from .montage import parse_speed, render_grid
+
+    states = [(n, st) for n, st in _states_or_fail(group) if st.record_dirs]
+    if not states:
+        raise ValueError("no VM in the group has recorded anything this session")
+    msg = "stopped recording: " + ", ".join(
+        f"{n} {st.vm.auto.call('record stop').get('frames')} frames" for n, st in states)
+    if video:
+        sources = [((labels or {}).get(n, n), st.record_dirs) for n, st in states]
+        msg += "; " + render_grid(sources, Path(video).expanduser(), parse_speed(speed))
     return msg
 
 

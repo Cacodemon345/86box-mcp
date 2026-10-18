@@ -36,6 +36,16 @@ def test_two_vms_in_lockstep(tmp_path):
                 out["list"] = await call("vm_list")
                 out["p1"] = await call("screen_text", vm="p1")
                 out["p2"] = await call("screen_text", vm="p2")
+                await call("record_start", vm="p1", directory=str(tmp_path / "rec1"), interval_ms=100)
+                await call("record_start", vm="p2", directory=str(tmp_path / "rec2"), interval_ms=100)
+                await call("step", vm="p1", ms=300)           # one group: p2 steps too
+                out["list_linked"] = await call("vm_list")
+                out["video"] = await call("record_stop_all", video=str(tmp_path / "both.mp4"),
+                                          labels={"p1": "one"}, speed=["0:2"])
+                await call("vm_group", vm="p2", group="solo")
+                await call("step", vm="p1", ms=300)
+                out["list_unlinked"] = await call("vm_list")
+                await call("vm_group", vm="p2", group="default")   # and level again
                 out["release"] = await call("release_all")
                 await asyncio.sleep(1)
                 out["hold"] = await call("hold_all")
@@ -51,6 +61,11 @@ def test_two_vms_in_lockstep(tmp_path):
     assert by["p1"]["running"] and by["p2"]["running"] and by["p1"]["ms"] == by["p2"]["ms"], lst
     assert by["p2"]["current"]                                   # the last one named
     assert "C:\\>" in out["p1"] and "C:\\>" in out["p2"]
+    ms = {v["name"]: v["ms"] for v in out["list_linked"]}
+    assert ms["p1"] == ms["p2"] == by["p1"]["ms"] + 300, out["list_linked"]
+    ms = {v["name"]: v["ms"] for v in out["list_unlinked"]}
+    assert ms["p1"] == ms["p2"] + 300, out["list_unlinked"]
+    assert "2 VMs" in out["video"] and (tmp_path / "both.mp4").stat().st_size > 0, out["video"]
     lst2 = out["list2"]
     assert len({v["ms"] for v in lst2}) == 1 and all(v["held"] for v in lst2), lst2
     assert "AUTOEXEC BAT" in out["dir_p2"]
