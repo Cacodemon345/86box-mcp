@@ -35,154 +35,6 @@ The same control makes runs repeatable: two cold boots driven by the same
 inputs produce byte-identical frames. Steps run as fast as the host allows
 (about 2× real time for a 486DX2-66 on an older Xeon).
 
-## Examples
-
-Everything below was driven through the MCP tools and recorded by 86Box
-itself. The GIFs are short excerpts; `python -m box86mcp.ctl render-timeline` turns a
-recording into a full video captioned with the MCP call in progress.
-
-### A demo game with readable memory state
-
-![The demo game driven through MCP: keyboard, mouse, memory writes and a bot playing turn by turn](docs/images/mcpdemo-play.gif)
-
-[`examples/mcpdemo`](examples/mcpdemo) is a small DOS game. The GIF shows
-its driver testing keys, `mouse_to`, `write_memory` and timing, then a
-~20-line bot playing with one `act()` call per frame. Every tick it publishes its
-state to a block in conventional memory: player, enemy, coin and pointer
-positions, score, lives, keys held. A pointer at `0000:04F0` says where the
-block is. Tests read it with `read_memory` and `wait_for_memory` instead of
-guessing from pixels, and can even post commands back into the block with
-`write_memory`. The driver checks 34 exact results this way, including
-movement per key press, mouse placement, COM1 logs and real-time vs held
-timing. Publish a block like this in your own program and the same tools work
-for it.
-
-### Installing FreeDOS from floppies
-
-![FreeDOS 1.4 being installed](docs/images/freedos-install.gif)
-
-From a blank 512 MB disk: the installer partitions it; Award BIOS setup is
-changed to boot from A: first; then format, six floppies, and a boot from C:.
-Afterwards FreeDOS's CD driver reads a disc built by `cdrom_insert`.
-
-### Installing Windows for Workgroups 3.11
-
-![Windows for Workgroups 3.11 being installed](docs/images/win311-install.gif)
-
-On MS-DOS 6.22: Setup's DOS stage, then its GUI with the buttons clicked by
-`mouse_to`. Three dialogs hide the pointer, so those took keys. Then `WIN`,
-and a quick Solitaire.
-
-### Learning Solitaire
-
-![Claude's first Solitaire game, with its mistakes narrated](docs/images/solitaire-attempt1.gif)
-
-Claude's first real game in Windows 3.11. The yellow line narrates its genuine
-mistakes as they happen. It aims at a menu inside the corner where `mouse_to`
-parks the pointer. A drag gets thrown off the window by Windows' mouse
-acceleration. `mouse_to` chases the game clock. Finally, a strategy mistake
-loses the game (score 8).
-
-![Claude winning Solitaire](docs/images/solitaire-attempt2.gif)
-
-After researching Klondike strategy (uncover hidden cards first; only empty a
-column for a king that unlocks something), it wins with a score of 2600. Most
-of that is Solitaire's time bonus. In held mode the game clock only runs while
-the agent acts, not while it thinks.
-
-### Playing Solitaire for score: 24,024
-
-![A 24,024-point Solitaire win](docs/images/solitaire-best1.gif)
-
-Next, Claude was asked for the highest score it could get. It wrote a bot,
-[`examples/solitaire`](examples/solitaire), on top of this project's Python
-client, and it scored **24,024**. The best possible is about 24,072. A human
-needs minutes to play a game, so typical scores are a few thousand.
-
-How the score works: Windows 3.1 Solitaire adds a bonus of 700,000 ÷ seconds
-for a win, but only for wins of 30 s or more. Each move scores a few points. So
-the bot plays all 52 cards up as fast as the mouse allows, then holds the last
-card until Solitaire's own clock reads 30. Recycling the waste costs 100
-points, so the best games never recycle.
-
-The bot builds on two parts of this project:
-- **Held time:** the emulator stops between actions, so recognising cards,
-  checking the screen and choosing a move take no game time.
-- **Exact input:** pointer acceleration is off in the VM, so one mouse count
-  moves the pointer exactly one pixel. The bot can jump straight to a card,
-  sending moves in pieces no faster than Windows reads the mouse.
-
-The bot also:
-- recognises cards from their corners (all 52 labelled once from contact
-  sheets);
-- keeps a model of the table, and checks it against the screen after every
-  move;
-- reads the score and clock off the status bar.
-
-Building it took a few rounds of fixes. One fix was for a double-click that
-nobody meant: a click to turn a card over, then a grab at the same spot. Then
-it played 50 recorded games, won 19 and kept the two best. Two wins never
-recycled the waste, and both beat 24,000:
-
-![A 24,014-point Solitaire win](docs/images/solitaire-best2.gif)
-
-Run it with `python examples/solitaire/play.py <games> [--minutes N]`. The bot
-needs a Windows 3.11 VM at 640×480 with Solitaire set to Draw One, the status
-bar on, and the mouse at its slowest speed. The labelled card corners are in
-`examples/solitaire/lib`. If your cards look different, `solbot.py collect`
-gathers new corners on a contact sheet for labelling.
-
-### SkiFree: the maximum score, 32,767
-
-![SkiFree's High Scores box showing 32767](docs/images/skifree-32767.gif)
-
-[`examples/skifree`](examples/skifree) plays the original 16-bit SkiFree 1.0
-in Windows 3.11. The bot reads the game's state from guest memory every tick
-and plays with the keyboard while time is held.
-
-In Freestyle it scored **32,767**, the largest value SkiFree's 16-bit score
-can hold, and skied across the finish line into the High Scores box:
-- **Finding the rules:** a [decompilation of the later 32-bit
-  version](https://github.com/yuv422/skifree_decomp), checked against 1.0 in
-  memory.
-- **The trick:** a backscratcher scores 8 points for every tick in the air,
-  and you can hop from a standstill. So the bot hops in place all the way down
-  the course, mixing in uphill steps so the hops don't drift it off the end.
-- **The finish:** it chose each tick's trick to land exactly on the limit.
-
-Another run outran the Abominable Snowman. Turbo skiing is faster than he
-is, so the bot plans its lane a screen ahead to avoid crashing. It kept going
-until the distance wrapped round (y is a 16-bit number, and past 2,047 m the
-distance shows as negative), and came back onto the course for a second lap.
-Here it crashes just after the wrap, and gets up and away before he reaches
-it:
-
-![The skier crashes, gets up and outruns the Abominable Snowman](docs/images/skifree-yeti-outrun.gif)
-
-### Arkanoid II: 386,920 points
-
-![Arkanoid II round 7, the bot keeping the ball in play](docs/images/arkanoid-round7.gif)
-
-[`examples/arkanoid`](examples/arkanoid) plays the 1989 DOS version of
-*Arkanoid II: Revenge of DoH* on MS-DOS 6.22. Every frame (about 14 ms), the
-bot reads the paddle, the balls, the falling capsules and the score from guest
-memory, then steers with the keyboard while time is held. Its best game scored
-386,920 and reached round 10:
-- **Prediction:** it works out where each falling ball will meet the paddle,
-  bouncing off the walls, and gets there early. The paddle is only about as
-  fast as the ball.
-- **Aiming:** where the ball hits the paddle sets its new angle. The bot cycles
-  through eight hit positions, so successive bounces sweep the field and reach
-  the last bricks.
-- **Capsules:** these are worth 1,000 points each. The bot catches them while
-  the ball is heading up, which more than tripled its scoring rate.
-
-Two lessons from getting it going:
-- **The demo:** after a game ends, the game's attract-mode demo takes over and
-  plays itself, which is easy to mistake for the bot playing.
-- **The keys:** the game only reads the keypad keys, not the extended arrow
-  keys.
-
 ## Quickstart
 
 Needs Linux and Python 3.11+. Get the code, and 86Box:
@@ -278,6 +130,178 @@ Then ask your agent something like:
 
 > Create a DOS VM in ~/vms/test, install ./build/GAME.EXE to C:\GAME, boot it,
 > start the game and get to the main menu.
+
+## Examples
+
+Everything below was driven through the MCP tools and recorded by 86Box
+itself. The GIFs are short excerpts; `python -m box86mcp.ctl render-timeline` turns a
+recording into a full video captioned with the MCP call in progress.
+
+### Playing games
+
+#### Learning Solitaire
+
+![Claude's first Solitaire game, with its mistakes narrated](docs/images/solitaire-attempt1.gif)
+
+Claude's first real game in Windows 3.11. The yellow line narrates its genuine
+mistakes as they happen. It aims at a menu inside the corner where `mouse_to`
+parks the pointer. A drag gets thrown off the window by Windows' mouse
+acceleration. `mouse_to` chases the game clock. Finally, a strategy mistake
+loses the game (score 8).
+
+![Claude winning Solitaire](docs/images/solitaire-attempt2.gif)
+
+After researching Klondike strategy (uncover hidden cards first; only empty a
+column for a king that unlocks something), it wins with a score of 2600. Most
+of that is Solitaire's time bonus. In held mode the game clock only runs while
+the agent acts, not while it thinks.
+
+#### Playing Solitaire for score: 24,024
+
+![A 24,024-point Solitaire win](docs/images/solitaire-best1.gif)
+
+Next, Claude was asked for the highest score it could get. It wrote a bot,
+[`examples/solitaire`](examples/solitaire), on top of this project's Python
+client, and it scored **24,024**. The best possible is about 24,072. A human
+needs minutes to play a game, so typical scores are a few thousand.
+
+How the score works: Windows 3.1 Solitaire adds a bonus of 700,000 ÷ seconds
+for a win, but only for wins of 30 s or more. Each move scores a few points. So
+the bot plays all 52 cards up as fast as the mouse allows, then holds the last
+card until Solitaire's own clock reads 30. Recycling the waste costs 100
+points, so the best games never recycle.
+
+The bot builds on two parts of this project:
+- **Held time:** the emulator stops between actions, so recognising cards,
+  checking the screen and choosing a move take no game time.
+- **Exact input:** pointer acceleration is off in the VM, so one mouse count
+  moves the pointer exactly one pixel. The bot can jump straight to a card,
+  sending moves in pieces no faster than Windows reads the mouse.
+
+The bot also:
+- recognises cards from their corners (all 52 labelled once from contact
+  sheets);
+- keeps a model of the table, and checks it against the screen after every
+  move;
+- reads the score and clock off the status bar.
+
+Building it took a few rounds of fixes. One fix was for a double-click that
+nobody meant: a click to turn a card over, then a grab at the same spot. Then
+it played 50 recorded games, won 19 and kept the two best. Two wins never
+recycled the waste, and both beat 24,000:
+
+![A 24,014-point Solitaire win](docs/images/solitaire-best2.gif)
+
+Run it with `python examples/solitaire/play.py <games> [--minutes N]`. The bot
+needs a Windows 3.11 VM at 640×480 with Solitaire set to Draw One, the status
+bar on, and the mouse at its slowest speed. The labelled card corners are in
+`examples/solitaire/lib`. If your cards look different, `solbot.py collect`
+gathers new corners on a contact sheet for labelling.
+
+#### SkiFree: the maximum score, 32,767
+
+![SkiFree's High Scores box showing 32767](docs/images/skifree-32767.gif)
+
+[`examples/skifree`](examples/skifree) plays the original 16-bit SkiFree 1.0
+in Windows 3.11. The bot reads the game's state from guest memory every tick
+and plays with the keyboard while time is held.
+
+In Freestyle it scored **32,767**, the largest value SkiFree's 16-bit score
+can hold, and skied across the finish line into the High Scores box:
+- **Finding the rules:** a [decompilation of the later 32-bit
+  version](https://github.com/yuv422/skifree_decomp), checked against 1.0 in
+  memory.
+- **The trick:** a backscratcher scores 8 points for every tick in the air,
+  and you can hop from a standstill. So the bot hops in place all the way down
+  the course, mixing in uphill steps so the hops don't drift it off the end.
+- **The finish:** it chose each tick's trick to land exactly on the limit.
+
+Another run outran the Abominable Snowman. Turbo skiing is faster than he
+is, so the bot plans its lane a screen ahead to avoid crashing. It kept going
+until the distance wrapped round (y is a 16-bit number, and past 2,047 m the
+distance shows as negative), and came back onto the course for a second lap.
+Here it crashes just after the wrap, and gets up and away before he reaches
+it:
+
+![The skier crashes, gets up and outruns the Abominable Snowman](docs/images/skifree-yeti-outrun.gif)
+
+#### Arkanoid II: 386,920 points
+
+![Arkanoid II round 7, the bot keeping the ball in play](docs/images/arkanoid-round7.gif)
+
+[`examples/arkanoid`](examples/arkanoid) plays the 1989 DOS version of
+*Arkanoid II: Revenge of DoH* on MS-DOS 6.22. Every frame (about 14 ms), the
+bot reads the paddle, the balls, the falling capsules and the score from guest
+memory, then steers with the keyboard while time is held. Its best game scored
+386,920 and reached round 10:
+- **Prediction:** it works out where each falling ball will meet the paddle,
+  bouncing off the walls, and gets there early. The paddle is only about as
+  fast as the ball.
+- **Aiming:** where the ball hits the paddle sets its new angle. The bot cycles
+  through eight hit positions, so successive bounces sweep the field and reach
+  the last bricks.
+- **Capsules:** these are worth 1,000 points each. The bot catches them while
+  the ball is heading up, which more than tripled its scoring rate.
+
+Two lessons from getting it going:
+- **The demo:** after a game ends, the game's attract-mode demo takes over and
+  plays itself, which is easy to mistake for the bot playing.
+- **The keys:** the game only reads the keypad keys, not the extended arrow
+  keys.
+
+### Development and testing
+
+#### A demo game with readable memory state
+
+![The demo game driven through MCP: keyboard, mouse, memory writes and a bot playing turn by turn](docs/images/mcpdemo-play.gif)
+
+[`examples/mcpdemo`](examples/mcpdemo) is a small DOS game. The GIF shows
+its driver testing keys, `mouse_to`, `write_memory` and timing, then a
+~20-line bot playing with one `act()` call per frame. Every tick it publishes its
+state to a block in conventional memory: player, enemy, coin and pointer
+positions, score, lives, keys held. A pointer at `0000:04F0` says where the
+block is. Tests read it with `read_memory` and `wait_for_memory` instead of
+guessing from pixels, and can even post commands back into the block with
+`write_memory`. The driver checks 34 exact results this way, including
+movement per key press, mouse placement, COM1 logs and real-time vs held
+timing. Publish a block like this in your own program and the same tools work
+for it.
+
+#### Installing FreeDOS from floppies
+
+![FreeDOS 1.4 being installed](docs/images/freedos-install.gif)
+
+From a blank 512 MB disk: the installer partitions it; Award BIOS setup is
+changed to boot from A: first; then format, six floppies, and a boot from C:.
+Afterwards FreeDOS's CD driver reads a disc built by `cdrom_insert`.
+
+#### Installing Windows for Workgroups 3.11
+
+![Windows for Workgroups 3.11 being installed](docs/images/win311-install.gif)
+
+On MS-DOS 6.22: Setup's DOS stage, then its GUI with the buttons clicked by
+`mouse_to`. Three dialogs hide the pointer, so those took keys. Then `WIN`,
+and a quick Solitaire.
+
+#### Windows 98 with V9x: two views of one machine
+
+![Device Manager in Windows 98, opened through V9x while 86box-mcp scans the PCI bus](docs/images/v9x-device-manager.png)
+
+[`examples/v9x`](examples/v9x) installs Windows 98 and
+[V9x Remote Agent](https://github.com/michaeldale/V9x-Remote-Agent) into one
+VM, and drives it through both MCP servers at once.
+[`crossover.py`](examples/v9x/crossover.py) checks 17 combinations, such as
+V9x opening a file in Notepad while `find_memory` finds its text in RAM. All
+17 behaved as expected.
+[`hwview.py`](examples/v9x/hwview.py) takes two inventories of the PC and
+matches them. 86box-mcp scans the PCI bus through the debugger, from outside.
+V9x exports Windows' Plug and Play tree (`HKLM\Enum`), from inside. All four
+PCI functions matched a Windows device at the same bus, device and function,
+and the ISA PnP NE2000 was found as an RTL8019. The SB16, which isn't Plug and
+Play, was never detected: Device Manager has no sound category. That's the
+kind of mismatch to look for when you emulate a device. See
+[the example's README](examples/v9x/README.md) for the setup and
+[driver development](docs/driver-development.md) for the debugger.
 
 ## Tools
 
