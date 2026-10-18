@@ -613,9 +613,13 @@ class VM:
         """path, as 86Box can open it. The Docker wrapper mounts only $HOME, /tmp and the repo, so
         files elsewhere are copied into the run directory first; a native 86Box sees everything."""
         path = Path(path).expanduser().resolve()
-        if self.binary.name == "86box.sh" and not any(path.is_relative_to(p) for p in (Path.home(), Path("/tmp"))):
+        dockerised = self.binary.suffix == ".sh"      # docker/86box.sh, or a copy of it for another build
+        if dockerised and not any(path.is_relative_to(p) for p in (Path.home(), Path("/tmp"))):
             copy = self.run_dir / path.name
             shutil.copy(path, copy)
+            if path.suffix.lower() == ".cue":          # and the track files the cue sheet names
+                for name in re.findall(r'^\s*FILE\s+"([^"]+)"', path.read_text(errors="replace"), re.M | re.I):
+                    shutil.copy(path.parent / name, self.run_dir / Path(name).name)
             path = copy
         return path
 
