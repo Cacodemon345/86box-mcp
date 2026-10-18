@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+import contextlib
+
+from .gdbrsp import Gdb, describe_stop
 from .protocol import SUPPORTED_PROTOCOLS, Automation, AutomationError
 
 
@@ -249,15 +254,33 @@ class VM:
             raise ValueError(f"BOX86_TRANSPORT must be unix or tcp, not {self.transport!r}")
         self.auto = Automation(self.endpoint, self.token_file)
         self._media_seq = 0
+        self._init_debugger("127.0.0.1")
+
+    def _init_debugger(self, stub_host: str) -> None:
+        self.auto.on_debugger_stop = self._debugger_stop
+        self.stub_host = stub_host
+        self.gdb: Gdb | None = None
+        self.gdb_port: int | None = None
+        self.gdb_stopped = False       # the stub has the CPU stopped (a breakpoint, or a step)
+        self._stub_let_go = False
+        self._expect_stop = False      # inside a debugger step or run, a stop is the expected result
+        self.breaks: set[tuple[int, str, int]] = set()   # (address, kind, length) set through the stub
 
     def start(self, held: bool = True, window: bool = False, extra_args: list[str] | None = None,
-              com1_log: bool = False) -> dict:
+              com1_log: bool = False, debugger: bool = False) -> dict:
         """Launch 86Box. window=True shows the normal 86Box window on $DISPLAY. com1_log=True captures
-        COM1 output (off by default: with it, runs are not always byte-for-byte reproducible)."""
+        COM1 output (off by default: with it, runs are not always byte-for-byte reproducible).
+        debugger=True attaches to 86Box's GDB stub, for breakpoints, instruction steps and port I/O
+        (86Box built with -D GDBSTUB=ON); see self.gdb."""
         if not (self.vm_dir / "86box.cfg").exists():
             raise FileNotFoundError(f"{self.vm_dir}/86box.cfg not found")
         if not self.binary.exists():
             raise FileNotFoundError(f"86Box binary {self.binary} not found (set BOX86_BINARY)")
+        if debugger:
+            # Every 86Box stub listens on 12345 unless told otherwise; give this one its own port.
+            cfg = self.vm_dir / "86box.cfg"
+            lines = _ini_set(cfg.read_text().splitlines(), "General", "gdbstub_port", str(_free_port()))
+            cfg.write_text("\n".join(lines) + "\n")
         log = configure_serial_capture(self.vm_dir, 1) if com1_log else None
         if log:
             self.serial_logs[1] = log
@@ -295,7 +318,72 @@ class VM:
             self.stop()
             raise AutomationError(f"86Box speaks automation protocol {status.get('protocol')}; "
                                   f"this server supports {sorted(SUPPORTED_PROTOCOLS)}")
+        if debugger:
+            self.attach_debugger()
         return status
+
+    # GDB stub ---------------------------------------------------------------
+
+    def _stub_port(self, wait: float = 0.0) -> int | None:
+        """The port 86Box's GDB stub listens on, from its log, or None if it has no stub (yet)."""
+        deadline = time.monotonic() + wait
+        while True:
+            log = self.log_tail(400)
+            m = re.search(r"GDB Stub: Listening on port (\d+)", log)
+            if m:
+                return int(m.group(1))
+            if "GDB Stub: Failed to bind" in log or time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+    def attach_debugger(self) -> Gdb:
+        """Connect to the GDB stub and let the CPU run under automation control as usual."""
+        # The stub starts when the machine does, just after the automation socket.
+        port = self._stub_port(wait=10)
+        if port is None:
+            raise AutomationError("no GDB stub: this needs 86Box built with -D GDBSTUB=ON "
+                                  f"(and a free port for it); log tail:\n{self.log_tail(10)}")
+        self.gdb_port = port
+        self.gdb = Gdb(self.stub_host, port)
+        self.gdb.cont()        # the stub starts the CPU stopped
+        self.gdb_stopped = False
+        return self.gdb
+
+    @contextlib.contextmanager
+    def expecting_stop(self):
+        """Within this, a timed command that ends because the debugger stopped the CPU just returns."""
+        self._expect_stop = True
+        try:
+            yield
+        finally:
+            self._expect_stop = False
+
+    def _debugger_stop(self, request: str, reply: dict) -> dict:
+        if self.gdb is not None:
+            if self._expect_stop:
+                self.gdb_stopped = True
+                return reply
+            what = request.split()[0]
+            if self.gdb_stopped:
+                raise AutomationError(f"{what}: the debugger has the CPU stopped, so no time can pass; "
+                                      "call debug_continue, run_until_break or step_instructions first")
+            self.gdb_stopped = True
+            why = describe_stop(self.gdb.recv(timeout=10))
+            raise AutomationError(f"{what}: a {why} at linear {self.gdb.regs()['eip']:#x} stopped the CPU, "
+                                  f"at emulated t={reply.get('ms')}ms; it stays stopped until "
+                                  "debug_continue, run_until_break or step_instructions")
+        # An 86Box built with the GDB stub starts the CPU stopped until a debugger lets it go, and a
+        # debugger that connects and leaves does. Then redo the request; no time has passed.
+        port = self._stub_port(wait=2)
+        if port is None or self._stub_let_go:
+            return reply
+        self._stub_let_go = True
+        try:
+            Gdb(self.stub_host, port).close()
+        except OSError:
+            return reply
+        time.sleep(0.2)
+        return self.auto.call(request)
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -316,6 +404,9 @@ class VM:
                 except subprocess.TimeoutExpired:
                     os.killpg(self.proc.pid, signal.SIGKILL)
                     self.proc.wait()
+        if self.gdb is not None:
+            self.gdb.close()
+            self.gdb = None
         if self.proc and self.proc.stdin:
             self.proc.stdin.close()
         self.auto.close()
@@ -462,7 +553,11 @@ class AttachedVM(VM):
             with os.fdopen(fd, "w") as f:
                 f.write(token.strip() + "\n")
         self.auto = Automation(endpoint, self.token_file)
+        self._init_debugger(endpoint[4:].rsplit(":", 1)[0] if endpoint.startswith("tcp:") else "127.0.0.1")
         self.auto.connect(wait=10)
+
+    def _stub_port(self, wait: float = 0.0) -> int | None:
+        return 12345        # no log to read it from; the stub's default
 
     def running(self) -> bool:
         return self.auto.sock is not None

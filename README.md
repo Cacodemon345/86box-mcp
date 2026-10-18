@@ -296,11 +296,17 @@ These work with any guest OS:
 | `serial_read`, `wait_for_serial` | Guest output on COM1 |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |
 | `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time; hard reset or Ctrl+Alt+Del |
+| `breakpoint_set`, `run_until_break`, `step_instructions`, `debug_continue` | With `vm_start(debugger=True)` and 86Box built with `-D GDBSTUB=ON`: execution breakpoints and memory watchpoints, single instructions, all while held |
+| `io_read`, `io_write`, `pci_scan`, `pci_config_read` | Also with the debugger: port I/O as the CPU would do it, and PCI configuration space |
 
 DOS helpers assume DOS and FAT disks: `dos_create_vm` (VM with a bootable DOS
 disk; takes `config` and `nvr` like `vm_create`), `dos_install_files` (copy files of any size onto C: while stopped),
 `dos_put_floppy` (hot-insert a floppy with some files) and `dos_run` (type a
 command and wait for the prompt).
+
+The debugger tools are for developing drivers and device emulation; see
+[docs/driver-development.md](docs/driver-development.md), which also lists
+what else would help and what it would take in 86Box.
 
 `python -m box86mcp.ctl` drives the server from a shell, one call at a time,
 and renders recordings into captioned videos; that's how the examples were
@@ -431,6 +437,10 @@ This is an early release, built for developing our own DOS games and tools.
   does in its keyboard-driven dialogs), and busy animation can mask it.
   86Box's absolute devices (tablets, touchscreens) need guest drivers that
   these systems don't ship.
+- **The debugger needs 86Box fixes that aren't upstream yet.** Without them,
+  the GDB stub can't answer while the machine is held, and memory watchpoints
+  on RAM don't fire. See
+  [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
 - **COM1 output only.** The guest can't read serial input yet. Capturing COM1
   (`vm_start(com1_log=True)`) is off by default. It used to look like it made
   runs occasionally non-reproducible (about 2 in 6). A likelier cause has since

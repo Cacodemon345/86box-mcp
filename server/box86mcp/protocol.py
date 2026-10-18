@@ -60,6 +60,9 @@ class Automation:
         self.timeout = timeout
         self.sock: socket.socket | None = None
         self._buf = b""
+        # Called with (request, reply) when a timed command ends early because 86Box's GDB stub has
+        # stopped the CPU; returns the reply to use.
+        self.on_debugger_stop = None
 
     @property
     def path(self) -> str:
@@ -118,6 +121,8 @@ class Automation:
         reply = json.loads(raw)
         if not reply.get("ok"):
             raise AutomationError(reply.get("error", "unknown error"))
+        if reply.get("stopped") == "debugger" and self.on_debugger_stop:
+            return self.on_debugger_stop(line, reply)
         return reply
 
     # Convenience wrappers ------------------------------------------------

@@ -14,6 +14,7 @@ from PIL import Image as PILImage
 
 from . import disk
 from . import keys as K
+from .gdbrsp import BREAK_KINDS, Gdb, describe_stop
 from .protocol import AutomationError
 from .vm import VM, machine_of, prime_nvr, write_config
 
@@ -60,7 +61,10 @@ def _snapshot(max_width: int) -> tuple[bytes, dict]:
 
 
 def _time_note(info: dict) -> str:
-    return f"emulated t={info.get('ms')}ms frame={info.get('frames')}"
+    note = f"emulated t={info.get('ms')}ms frame={info.get('frames')}"
+    if info.get("stopped") == "debugger":
+        note += "; STOPPED: 86Box's GDB stub has the CPU stopped"
+    return note
 
 
 # Lifecycle -----------------------------------------------------------------
@@ -137,13 +141,17 @@ def dos_install_files(paths: list[str], dest_dir: str = "\\", vm_dir: str | None
 
 
 @mcp.tool()
-def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False, com1_log: bool = False) -> str:
+def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False, com1_log: bool = False,
+             debugger: bool = False) -> str:
     """Boot the 86Box machine whose 86box.cfg lives in vm_dir. vm_dir defaults to the last VM.
 
     held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
     window=True shows the 86Box window on the host's display so a person can watch (and also type);
     the default runs without a window. com1_log=True captures COM1 output for serial_read and
     wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
+    debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
+    step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
+    -D GDBSTUB=ON.
     """
     global _vm, _held
     if _vm is not None and _vm.running():
@@ -153,9 +161,10 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool = False,
             raise ValueError("pass vm_dir")
         vm_dir = str(_vm.vm_dir)
     _vm = VM(vm_dir)
-    status = _vm.start(held=held, window=window, com1_log=com1_log)
+    status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
     _held = held
-    return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{', windowed' if window else ''}). Log: {_vm.log_path}"
+    extras = (", windowed" if window else "") + (f", debugger on port {_vm.gdb_port}" if debugger else "")
+    return f"86Box {status.get('version')} running from {vm_dir} ({'held' if held else 'real-time'}{extras}). Log: {_vm.log_path}"
 
 
 @mcp.tool()
@@ -874,6 +883,224 @@ def diff_memory(change: str = "changed", name: str = "default", size: int = 1, s
 def registers() -> dict:
     """CPU registers at the current instruction boundary (sampled between 1 ms quanta)."""
     return vm().auto.regs()
+
+
+# Debugging, through 86Box's GDB stub ------------------------------------------------------------
+
+
+def _debugger() -> tuple[VM, Gdb]:
+    v = vm()
+    if v.gdb is None:
+        raise AutomationError("no debugger: start with vm_start(debugger=True), which needs 86Box built "
+                              "with -D GDBSTUB=ON")
+    return v, v.gdb
+
+
+def _linear_eip(g: Gdb) -> int:
+    return g.regs()["eip"]      # the stub reports eip as a linear address (CS base + EIP)
+
+
+def _stop_cpu(v: VM, g: Gdb) -> None:
+    """Make sure the stub has the CPU stopped at an instruction boundary."""
+    if v.gdb_stopped:
+        return
+    g.sock.sendall(b"\x03")     # interrupt; the stub stops the CPU when it next runs
+    with v.expecting_stop():
+        v.auto.step(1)
+    g.recv(timeout=10)
+    v.gdb_stopped = True
+
+
+def _single_step(v: VM, g: Gdb) -> str:
+    """One instruction, stepping over an execution breakpoint at the current address."""
+    here = _linear_eip(g)
+    over = [(a, k, n) for (a, k, n) in v.breaks if k == "exec" and a == here]
+    for a, k, n in over:
+        g.clear_break(a, k, n)
+    g.send("s")
+    with v.expecting_stop():
+        v.auto.step(1)
+    stop = g.recv(timeout=10)
+    for a, k, n in over:
+        g.set_break(a, k, n)
+    v.gdb_stopped = True
+    return stop
+
+
+def _where(v: VM, g: Gdb) -> str:
+    r = v.auto.regs()
+    lin = _linear_eip(g)
+    code = v.auto.memr(lin, 8).hex(" ") if lin < v.mem_bytes() else "?"
+    return f"{r['cs']:04x}:{r['eip']:08x} (linear {lin:#x}), bytes {code}"
+
+
+@mcp.tool()
+def breakpoint_set(addr: int, kind: str = "exec", length: int = 1, clear: bool = False) -> str:
+    """Stop the CPU when it executes the instruction at addr, or when it writes, reads or accesses
+    memory at addr..addr+length (kind "exec", "write", "read" or "access"). clear=True removes it.
+
+    Addresses are linear: in real mode, segment*16 + offset; without paging, physical. Then
+    run_until_break runs to it. Watchpoints stop after the access, with the CPU at the next
+    instruction. Needs vm_start(debugger=True).
+    """
+    v, g = _debugger()
+    if kind not in BREAK_KINDS or kind == "exec_sw":
+        raise ValueError("kind must be exec, write, read or access")
+    key = (addr, kind, length)
+    if clear:
+        g.clear_break(addr, kind, length)
+        v.breaks.discard(key)
+        return f"cleared {kind} breakpoint at {addr:#x}"
+    g.set_break(addr, kind, length)
+    v.breaks.add(key)
+    return f"{kind} breakpoint at {addr:#x}" + (f" ({length} bytes)" if kind != "exec" else "") + \
+        f"; {len(v.breaks)} set"
+
+
+def _resume(v: VM, g: Gdb) -> None:
+    if v.gdb_stopped:
+        _single_step(v, g)      # over a breakpoint at the current instruction
+        g.cont()
+        v.gdb_stopped = False
+
+
+@mcp.tool()
+def debug_continue() -> str:
+    """Let the CPU go on after a breakpoint or step_instructions, so step, press_keys, dos_run and
+    the rest advance the machine again. Breakpoints stay set; a hit during another tool's call stops
+    the CPU and that call reports it."""
+    v, g = _debugger()
+    was = v.gdb_stopped
+    _resume(v, g)
+    return "the CPU runs again (held: time passes in tool calls)" if was else "the CPU wasn't stopped"
+
+
+@mcp.tool()
+def run_until_break(timeout_ms: int = 10000) -> str:
+    """Run until a breakpoint or watchpoint stops the CPU, or timeout_ms of emulated time passes.
+
+    Reports where the CPU stopped and why. Running on from a breakpoint steps over it first. The
+    CPU then stays stopped, and tools that need time to pass (step, press_keys, dos_run...) fail
+    until debug_continue.
+    """
+    v, g = _debugger()
+    _resume(v, g)
+    with v.expecting_stop():
+        r = v.auto.step(timeout_ms)
+    if r.get("stopped") != "debugger":
+        return f"no break in {timeout_ms} ms; {_time_note(r)}"
+    why = describe_stop(g.recv(timeout=10))
+    return f"{why} at {_where(v, g)}; emulated t={r['ms']}ms"
+
+
+@mcp.tool()
+def step_instructions(count: int = 1) -> str:
+    """Execute count instructions (up to 200) one at a time, listing each address and its first bytes.
+
+    Stops the CPU first if it's running. Afterwards the CPU stays stopped: debug_continue or
+    run_until_break go on.
+    Each instruction counts as one 1 ms quantum on the automation clock (the guest itself sees only
+    the instruction's own cycles).
+    """
+    if not 1 <= count <= 200:
+        raise ValueError("count must be 1..200")
+    v, g = _debugger()
+    _stop_cpu(v, g)
+    lines = [f"start  {_where(v, g)}"]
+    for i in range(count):
+        _single_step(v, g)
+        lines.append(f"{i + 1:5d}  {_where(v, g)}")
+    return "\n".join(lines)
+
+
+_WIDTHS = {1: "b", 2: "w", 4: "l"}
+
+
+def _io_values(out: str) -> list[int]:
+    return [int(x, 16) for line in out.splitlines() if ":" in line for x in line.split(":", 1)[1].split()]
+
+
+@mcp.tool()
+def io_read(port: int, width: int = 1, count: int = 1) -> str:
+    """Read count values of width bytes (1, 2 or 4) from I/O port `port` upward, as the CPU's IN would.
+
+    Reading a port can change the device's state (a status register that clears on read, a FIFO).
+    Works while held. Needs vm_start(debugger=True).
+    """
+    if width not in _WIDTHS or not 1 <= count <= 256:
+        raise ValueError("width must be 1, 2 or 4, and count 1..256")
+    _, g = _debugger()
+    vals = _io_values(g.monitor(f"i{_WIDTHS[width]} {port:x} {count * width:x}"))
+    return f"port {port:#x}: " + " ".join(f"{x:#0{2 + 2 * width}x}" for x in vals)
+
+
+@mcp.tool()
+def io_write(port: int, value: int, width: int = 1) -> str:
+    """Write value (width 1, 2 or 4 bytes) to I/O port `port`, as the CPU's OUT would.
+
+    The device acts on it at once, as if the guest had written it. Works while held. Needs
+    vm_start(debugger=True).
+    """
+    if width not in _WIDTHS:
+        raise ValueError("width must be 1, 2 or 4")
+    _, g = _debugger()
+    g.monitor(f"o{_WIDTHS[width]} {port:x} {value:x}")
+    return f"wrote {value:#x} to port {port:#x}"
+
+
+_PCI_CLASSES = {0x00: "unclassified", 0x01: "storage", 0x02: "network", 0x03: "display", 0x04: "multimedia",
+                0x05: "memory", 0x06: "bridge", 0x07: "communication", 0x08: "system", 0x09: "input",
+                0x0C: "serial bus"}
+
+
+def _pci_dwords(g: Gdb, bus: int, dev: int, fn: int, offsets: list[int]) -> list[int]:
+    """Read config dwords through configuration mechanism #1 (ports 0xCF8/0xCFC), restoring 0xCF8."""
+    saved = _io_values(g.monitor("il cf8 4"))[0]
+    out = []
+    for off in offsets:
+        g.monitor(f"ol cf8 {0x80000000 | bus << 16 | dev << 11 | fn << 8 | (off & 0xFC):x}")
+        out.append(_io_values(g.monitor("il cfc 4"))[0])
+    g.monitor(f"ol cf8 {saved:x}")
+    return out
+
+
+@mcp.tool()
+def pci_scan(bus: int = 0) -> str:
+    """List the PCI functions on `bus`: address, vendor:device ID, class, and interrupt line/pin.
+
+    Through configuration mechanism #1, as a driver would. PCI machines only. Needs
+    vm_start(debugger=True).
+    """
+    _, g = _debugger()
+    lines = []
+    for dev in range(32):
+        for fn in range(8):
+            ident, cls, hdr, irq = _pci_dwords(g, bus, dev, fn, [0x00, 0x08, 0x0C, 0x3C])
+            if ident in (0xFFFFFFFF, 0):
+                if fn == 0:
+                    break
+                continue
+            klass = _PCI_CLASSES.get(cls >> 24, f"class {cls >> 24:#04x}")
+            pin = "ABCD"[((irq >> 8) & 0xFF) - 1] if 1 <= (irq >> 8) & 0xFF <= 4 else "-"
+            lines.append(f"{bus:02x}:{dev:02x}.{fn} {ident & 0xFFFF:04x}:{ident >> 16:04x} {klass} "
+                         f"({cls >> 8:06x}) irq line {irq & 0xFF} pin {pin}")
+            if fn == 0 and not (hdr >> 16) & 0x80:
+                break       # not a multi-function device
+    return "\n".join(lines) or f"no PCI functions on bus {bus}"
+
+
+@mcp.tool()
+def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, length: int = 64) -> str:
+    """Hex dump of a PCI function's configuration space, offset..offset+length (up to 256), as
+    dwords. Needs vm_start(debugger=True)."""
+    if not (0 <= offset < 256 and 1 <= length <= 256 - offset):
+        raise ValueError("offset and length must stay within the 256-byte configuration space")
+    _, g = _debugger()
+    start = offset & ~3
+    offs = list(range(start, offset + length, 4))
+    vals = _pci_dwords(g, bus, device, function, offs)
+    rows = [f"{o:02x}: {v:08x}" for o, v in zip(offs, vals)]
+    return f"{bus:02x}:{device:02x}.{function} config:\n" + "\n".join(rows)
 
 
 def main() -> None:
