@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
 import socket
 import struct
 import threading
@@ -150,3 +151,53 @@ def test_breakpoints_steps_and_ports(tmp_path, server):
     assert server.io_read(0x71) == "port 0x71: 0x26"
     assert "1039:0496 bridge" in server.pci_scan()      # the 486SP3C's SiS 496
     assert "MS-DOS Version 6.22" in server.dos_run("VER")
+
+
+@needs_gdb_build
+def test_debugger_through_an_mcp_client(tmp_path):
+    """The same tools as an agent uses them: through MCP, over stdio, with errors as messages."""
+    import asyncio
+
+    from mcp import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    vm_dir = make_dos_vm(tmp_path / "vm")
+    env = dict(os.environ, BOX86_BINARY=GDB_BINARY, XDG_CACHE_HOME=str(tmp_path / "cache"))
+    params = StdioServerParameters(command=sys.executable, args=["-m", "box86mcp.server"], env=env)
+
+    async def go():
+        async with stdio_client(params) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+
+                async def call(tool, **args):
+                    res = await s.call_tool(tool, args)
+                    return res.is_error, "".join(c.text for c in res.content if c.type == "text")
+
+                out = {"start": await call("vm_start", vm_dir=str(vm_dir), debugger=True),
+                       "prompt": await call("wait_for_text", text="C:\\>", timeout_ms=30000)}
+                ivt = bytes.fromhex("".join((await call("read_memory", addr=0x20, length=4))[1].split()[1:5]))
+                isr = int.from_bytes(ivt[2:], "little") * 16 + int.from_bytes(ivt[:2], "little")
+                out["isr"] = isr
+                out["break"] = await call("breakpoint_set", addr=isr)
+                out["run"] = await call("run_until_break", timeout_ms=2000)
+                out["steps"] = await call("step_instructions", count=3)
+                out["step_while_stopped"] = await call("step", ms=100)
+                out["continue"] = await call("debug_continue")
+                out["clear"] = await call("breakpoint_set", addr=isr, clear=True)
+                out["cmos"] = (await call("io_write", port=0x70, value=0x0A), await call("io_read", port=0x71))
+                out["pci"] = await call("pci_scan")
+                out["dos"] = await call("dos_run", command="VER")
+                await call("vm_stop")
+                return out
+
+    out = asyncio.run(go())
+    assert not out["start"][0] and "debugger on port" in out["start"][1], out["start"]
+    assert not out["prompt"][0], out["prompt"]
+    assert not out["run"][0] and f"linear {out['isr']:#x}" in out["run"][1], out["run"]
+    assert not out["steps"][0] and len(out["steps"][1].splitlines()) == 4, out["steps"]
+    assert out["step_while_stopped"][0] and "debugger has the CPU stopped" in out["step_while_stopped"][1]
+    assert not out["continue"][0] and "runs again" in out["continue"][1]
+    assert out["cmos"][1] == (False, "port 0x71: 0x26"), out["cmos"]
+    assert not out["pci"][0] and "1039:0496" in out["pci"][1], out["pci"]
+    assert "MS-DOS Version 6.22" in out["dos"][1], out["dos"]
