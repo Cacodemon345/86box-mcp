@@ -160,6 +160,16 @@ the examples.
 The tests that boot DOS need that image too, as `BOX86_TEST_BASE_IMG`, and are
 skipped without it.
 
+**Give your agent the skill.** [`.claude/skills/86box`](.claude/skills/86box/SKILL.md)
+teaches an agent how to use the server well: when to run held or in real
+time, how to install software, play real-time programs, compare 86Box builds,
+use the debugger and work alongside V9x, and the usual pitfalls. Claude Code
+picks it up by itself in this repo. Elsewhere, copy it into your skills:
+
+```sh
+cp -r .claude/skills/86box ~/.claude/skills/
+```
+
 Then ask your agent something like:
 
 > Create a DOS VM in ~/vms/test, install ./build/GAME.EXE to C:\GAME, boot it,
@@ -398,12 +408,6 @@ command and wait for the prompt).
 The debugger tools are for developing drivers and device emulation; see
 [docs/driver-development.md](docs/driver-development.md), which also lists
 what else would help and what it would take in 86Box.
-
-**For agents:** [`.claude/skills/86box`](.claude/skills/86box/SKILL.md) is a
-Claude Code skill on how to orchestrate the server: held versus real time,
-workflows (installs, games, comparing builds, the debugger, V9x), and pitfalls.
-Claude Code uses it automatically in this repo; copy the folder to
-`~/.claude/skills/` to have it everywhere.
 
 `python -m box86mcp.ctl` drives the server from a shell, one call at a time,
 and renders recordings into captioned videos; that's how the examples were
