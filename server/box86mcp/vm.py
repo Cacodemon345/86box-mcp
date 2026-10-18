@@ -41,6 +41,9 @@ def _default_binary() -> str:
 
 
 BINARY = _env_path("BOX86_BINARY", _default_binary())
+# Insecure mode, for machines you trust: 86Box's TCP automation socket without its token (86Box
+# --automation-insecure), and the MCP server's HTTP transport on a non-loopback address.
+INSECURE = os.environ.get("BOX86_INSECURE") == "1"
 
 # Disk images we build must not depend on when they were built, or two runs of the same script
 # differ (in DIR listings, for a start): a fixed volume serial for mformat, and a fixed timestamp
@@ -266,7 +269,7 @@ class VM:
         # UNIX socket on Linux/macOS (owner-only); TCP on loopback where there are no UNIX sockets.
         self.transport = os.environ.get("BOX86_TRANSPORT", "tcp" if os.name == "nt" else "unix")
         if self.transport == "tcp":
-            self.token_file = str(self.run_dir / "automation.token")
+            self.token_file = None if INSECURE else str(self.run_dir / "automation.token")
             self.endpoint = f"tcp:127.0.0.1:{_free_port()}"
         elif self.transport == "unix":
             self.token_file = None
@@ -318,6 +321,8 @@ class VM:
             args += ["-R", str(self.roms)]
         if self.token_file:
             args += ["--automation-token-file", self.token_file]
+        elif self.transport == "tcp":
+            args.append("--automation-insecure")
         if held:
             args.append("--automation-hold")
         args += extra_args or []
@@ -631,9 +636,7 @@ class AttachedVM(VM):
         self._media_seq = 0
         self.endpoint = endpoint
         self.token_file = None
-        if endpoint.startswith("tcp:"):
-            if not token:
-                raise ValueError("a TCP endpoint needs the token from 86Box's token file")
+        if endpoint.startswith("tcp:") and token:
             self.token_file = str(self.run_dir / "automation.token")
             fd = os.open(self.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -171,8 +172,9 @@ def vm_attach(endpoint: str, token: str | None = None) -> str:
     """Control an 86Box that is already running, possibly on another machine, instead of starting one.
 
     endpoint: "tcp:<host>:<port>" or "unix:<path>". token: the contents of the token file that 86Box
-    wrote at startup (required for TCP). Paths in later tool calls (media images, record_start
-    directories) are paths on that machine; screenshots come back over the connection.
+    wrote at startup (for TCP, unless 86Box runs with --automation-insecure). Paths in later tool
+    calls (media images, record_start directories) are paths on that machine; screenshots come back
+    over the connection.
     """
     global _vm, _held
     if _vm is not None and _vm.running():
@@ -1124,38 +1126,58 @@ def pci_config_read(bus: int, device: int, function: int = 0, offset: int = 0, l
     return f"{bus:02x}:{device:02x}.{function} config:\n" + "\n".join(rows)
 
 
-def _run_https(port: int, cert: str, key: str) -> None:
-    """Streamable HTTP over TLS, on loopback like plain HTTP. The SDK's own runner has no TLS
-    options, so run its app with uvicorn here."""
-    import uvicorn
+_LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _http_security(host: str, tls: bool):
+    """DNS-rebinding protection for a loopback address, allowing https:// origins too (the MCP
+    library's own default allows only http://). None, so no checks, on any other address: remote
+    clients send that address as their Host, which only insecure mode allows."""
     from mcp.server.transport_security import TransportSecuritySettings
 
+    if host not in _LOOPBACK:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
     loopback = ("127.0.0.1", "localhost", "[::1]")
-    # The SDK's DNS-rebinding protection for loopback allows only http:// origins; add https://.
-    security = TransportSecuritySettings(
+    schemes = ("http", "https") if tls else ("http",)
+    return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[f"{h}:*" for h in loopback],
-        allowed_origins=[f"{scheme}://{h}:*" for scheme in ("http", "https") for h in loopback],
+        allowed_origins=[f"{scheme}://{h}:*" for scheme in schemes for h in loopback],
     )
-    app = mcp.streamable_http_app(transport_security=security, host="127.0.0.1")
-    uvicorn.run(app, host="127.0.0.1", port=port, ssl_certfile=cert, ssl_keyfile=key,
-                log_level=mcp.settings.log_level.lower())
+
+
+def _run_http(host: str, port: int, cert: str | None, key: str | None) -> None:
+    """Streamable HTTP, over TLS with a certificate. The MCP library's own runner has no TLS
+    options, so run its app with uvicorn here."""
+    import uvicorn
+
+    app = mcp.streamable_http_app(transport_security=_http_security(host, bool(cert)), host=host)
+    tls = {"ssl_certfile": cert, "ssl_keyfile": key} if cert else {}
+    uvicorn.run(app, host=host, port=port, log_level=mcp.settings.log_level.lower(), **tls)
 
 
 def main() -> None:
+    from .vm import INSECURE
+
     httpport = os.environ.get('BOX86_MCP_HTTP_PORT', '0')
+    host = os.environ.get("BOX86_MCP_HTTP_HOST", "127.0.0.1")
     cert, key = os.environ.get("BOX86_MCP_TLS_CERT"), os.environ.get("BOX86_MCP_TLS_KEY")
     if bool(cert) != bool(key):
         raise SystemExit("set both BOX86_MCP_TLS_CERT and BOX86_MCP_TLS_KEY (PEM files), or neither")
-    if httpport != '0' and cert:
-        _run_https(int(httpport), cert, key)
-    elif httpport != '0':
-        mcp.run(transport="streamable-http", port=int(httpport))
-    elif cert:
-        raise SystemExit("BOX86_MCP_TLS_CERT and BOX86_MCP_TLS_KEY need BOX86_MCP_HTTP_PORT")
-    else:
+    if httpport == '0':
+        if cert:
+            raise SystemExit("BOX86_MCP_TLS_CERT and BOX86_MCP_TLS_KEY need BOX86_MCP_HTTP_PORT")
         mcp.run()
-
+        return
+    if host not in _LOOPBACK:
+        if not INSECURE:
+            raise SystemExit(f"BOX86_MCP_HTTP_HOST={host} is not a loopback address: anyone who can reach "
+                             "it could drive the VM and read and write files as you. Set BOX86_INSECURE=1 "
+                             "if that's what you want.")
+        print(f"box86mcp: WARNING: insecure mode: serving MCP without authentication on {host}:{httpport}; "
+              "anyone who can reach it can drive the VM and read and write files as this user",
+              file=sys.stderr, flush=True)
+    _run_http(host, int(httpport), cert, key)
 
 if __name__ == "__main__":
     main()

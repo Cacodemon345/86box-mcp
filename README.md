@@ -529,6 +529,26 @@ protection (only `localhost` hosts and origins). There is no authentication:
 any local process can connect and drive the VM, and through `vm_create` and
 the disk tools, read and write files as you.
 
+### Insecure mode
+
+For a machine and network you trust, `BOX86_INSECURE=1` drops the
+protections that get in the way of simple setups, the way 86Box's GDB stub
+already works:
+
+- **86Box's automation socket** over TCP (`BOX86_TRANSPORT=tcp`, the default
+  on Windows) runs without its token: the server starts 86Box with
+  `--automation-insecure`, and `vm_attach` connects to any 86Box started that
+  way without one. Any local process can then drive the VM.
+- **The MCP server's HTTP transport** may listen on any address, set with
+  `BOX86_MCP_HTTP_HOST` (for example `0.0.0.0`), without the DNS-rebinding
+  checks. Anyone who can reach that port can drive the VM and, through the
+  server's tools, **read and write files on this machine as you**. HTTPS
+  (above) encrypts the connection, but doesn't authenticate the client.
+
+Without `BOX86_INSECURE=1`, a non-loopback `BOX86_MCP_HTTP_HOST` is refused.
+`--automation-insecure` needs an 86Box with
+[86Box#8397](https://github.com/86Box/86Box/pull/8397).
+
 ## Status and limitations
 
 This is an early release, built for developing our own DOS games and tools.

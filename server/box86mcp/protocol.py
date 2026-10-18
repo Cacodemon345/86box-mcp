@@ -92,9 +92,9 @@ class Automation:
                 if time.monotonic() > deadline:
                     raise AutomationError(f"86Box automation endpoint {self.endpoint} did not come up")
                 time.sleep(0.1)
-        if self.endpoint.startswith("tcp:"):
-            if not self.token_file:
-                raise AutomationError("TCP automation needs the token file 86Box wrote")
+        if self.endpoint.startswith("tcp:") and self.token_file:
+            # Without a token (86Box run with --automation-insecure) there's nothing to send; an 86Box
+            # that does want one answers the first request with "authentication required".
             with open(self.token_file) as f:
                 token = f.read().strip()
             self.call(f"auth {token}")
