@@ -299,3 +299,15 @@ def test_soft_power_off_without_a_power_button(dos_vm):
     # The 486 has neither ACPI nor a soft power button, so quit soft is a plain power-off.
     assert dos_vm.power_off_soft(timeout=10)
     assert not dos_vm.running()
+
+
+def test_cfg_rewrite_keeps_line_endings(tmp_path):
+    """86Box on Windows writes 86box.cfg with CRLF; rewriting it (dropping the uuid) keeps them."""
+    from box86mcp.vm import _rewrite_cfg
+
+    for nl in ("\r\n", "\n"):
+        cfg = tmp_path / "86box.cfg"
+        cfg.write_bytes(nl.join(["[General]", "uuid = x", "vid_renderer = qt_software", ""]).encode())
+        lines = [l for l in cfg.read_text().splitlines() if not l.startswith("uuid")]
+        _rewrite_cfg(cfg, lines)
+        assert cfg.read_bytes() == nl.join(["[General]", "vid_renderer = qt_software", ""]).encode()

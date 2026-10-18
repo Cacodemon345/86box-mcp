@@ -15,6 +15,7 @@ from pathlib import Path
 import contextlib
 
 from .gdbrsp import Gdb, describe_stop
+from .guard import GRACE_S as GUARD_GRACE_S
 from .protocol import SUPPORTED_PROTOCOLS, Automation, AutomationError
 
 
@@ -213,6 +214,23 @@ def configure_serial_capture(vm_dir: str | os.PathLike, port: int = 1) -> Path |
     return log
 
 
+def _unlink_patiently(f: Path) -> None:
+    """Delete f. On Windows a just-written file can be held open for a moment (by a virus
+    scanner, say), so retry briefly, then leave it: it's a temporary file, and stop() mustn't fail."""
+    for attempt in range(5):
+        try:
+            f.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.2 * (attempt + 1))
+
+
+def _rewrite_cfg(cfg: Path, lines: list[str]) -> None:
+    """Write 86box.cfg back with the line endings it had (CRLF from 86Box on Windows)."""
+    newline = "\r\n" if b"\r\n" in cfg.read_bytes() else "\n"
+    cfg.write_text(newline.join(lines) + newline, newline="")
+
+
 def _free_port() -> int:
     """An unused loopback TCP port (86Box binds it a moment later)."""
     import socket
@@ -283,12 +301,11 @@ class VM:
         lines = cfg.read_text().splitlines()
         kept = [l for l in lines if l.split("=", 1)[0].strip() != "uuid"]
         if kept != lines:
-            cfg.write_text("\n".join(kept) + "\n")
+            _rewrite_cfg(cfg, kept)
         if debugger:
             # Every 86Box stub listens on 12345 unless told otherwise; give this one its own port.
             cfg = self.vm_dir / "86box.cfg"
-            lines = _ini_set(cfg.read_text().splitlines(), "General", "gdbstub_port", str(_free_port()))
-            cfg.write_text("\n".join(lines) + "\n")
+            _rewrite_cfg(cfg, _ini_set(cfg.read_text().splitlines(), "General", "gdbstub_port", str(_free_port())))
         log = configure_serial_capture(self.vm_dir, 1) if com1_log else None
         if log:
             self.serial_logs[1] = log
@@ -423,9 +440,17 @@ class VM:
                 self.proc.wait(timeout)
             except subprocess.TimeoutExpired:
                 if os.name == "nt":
-                    # No process groups: closing the guard's stdin below stops 86Box; kill the guard.
-                    self.proc.kill()
-                    self.proc.wait()
+                    # No process groups, and killing the guard alone would leave 86Box running:
+                    # close the guard's stdin, so that it stops 86Box (terminate, then kill)...
+                    if self.proc.stdin:
+                        self.proc.stdin.close()
+                    try:
+                        self.proc.wait(GUARD_GRACE_S + 5)
+                    except subprocess.TimeoutExpired:
+                        # ...and if even that fails, kill the guard and everything it started.
+                        subprocess.run(["taskkill", "/T", "/F", "/PID", str(self.proc.pid)],
+                                       capture_output=True)
+                        self.proc.wait()
                 else:
                     # SIGTERM first: docker/86box.sh traps it to kill its container.
                     os.killpg(self.proc.pid, signal.SIGTERM)
@@ -447,7 +472,7 @@ class VM:
             if f.is_dir() and not f.is_symlink():
                 shutil.rmtree(f, ignore_errors=True)
             else:
-                f.unlink(missing_ok=True)
+                _unlink_patiently(f)
 
     def power_off_soft(self, timeout: float = 60.0) -> bool:
         """Press the power button and let the guest shut itself down, in real time. True once 86Box
