@@ -371,6 +371,10 @@ expected.
 - **Pace V9x calls.** The agent takes 4 connections at most, and calls sent
   while the machine is held pile up. See
   [pacing](examples/v9x/README.md#pacing-v9x-calls-around-held-time).
+- **Two views of one machine:** `hwview.py` matches 86box-mcp's PCI scan
+  with Windows' own device tree, fetched by V9x. Every PCI function matched;
+  the non-PnP SB16 was never detected.
+  [Details](examples/v9x/README.md#the-hardwares-view-against-windows-view).
 - **Don't overlap:** 86box-mcp's disk tools need the VM stopped. Use
   `v9x_put_file` while Windows runs, and `screen_text` only reads text modes.
 

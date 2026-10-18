@@ -152,6 +152,50 @@ recordings; use **V9x** for running programs with exit codes and output, file
 transfer while Windows runs, reading text, and pointer placement with a
 read-back.
 
+## The hardware's view against Windows' view
+
+`hwview.py` takes two inventories of the same PC and matches them. From
+outside, 86box-mcp scans the PCI bus through the debugger (`pci_scan`, as a
+driver would, through ports 0xCF8/0xCFC). From inside, V9x has `regedit`
+export Windows' Plug and Play tree (`HKLM\Enum`) and fetches it. The question
+it answers is the one you ask when you emulate a device: did the guest find
+it, where, and as what?
+
+```sh
+BOX86_BINARY=<86Box built with -D GDBSTUB=ON> BOX86_ROMS=... python examples/v9x/hwview.py
+```
+
+It needs the debugger build (see
+[driver development](../../docs/driver-development.md#setting-up-the-debugger)).
+On our VM, every PCI function matched a Windows device at the same bus, device
+and function:
+
+| 86Box (`pci_scan`) | Windows (`HKLM\Enum\PCI`) |
+|---|---|
+| `00:00.0 8086:1250` bridge | Intel 82439HX Pentium(r) Processor to PCI bridge |
+| `00:07.0 8086:7000` bridge | Intel 82371SB PCI to ISA bridge |
+| `00:07.1 8086:7010` storage | Intel 82371SB PCI Bus Master IDE Controller |
+| `00:0c.0 5333:8811` display, IRQ 10 | S3 Trio32/64 PCI (732/764) |
+
+Windows also lists four "IRQ Holder for PCI Steering" entries under PCI; they
+are its interrupt routing, not devices. The other configured devices:
+
+| 86Box (`86box.cfg`) | Windows |
+|---|---|
+| network card `ne2kpnp` | Realtek RTL8019 PnP LAN adapter (`ISAPNP\RTL8019`) |
+| sound card `sb16` | **not found** |
+| PS/2 keyboard and mouse | Standard 101/102-Key keyboard, Standard PS/2 Port Mouse |
+| floppy, IDE hard disk, ATAPI CD-ROM | GENERIC NEC FLOPPY DISK, GENERIC IDE DISK TYPE47, 86Box 86B_CD00 |
+
+The SB16 isn't Plug and Play, and this install never detected it. Device
+Manager agrees: it has no sound category.
+
+![Device Manager, opened by V9x](../../docs/images/v9x-device-manager.png)
+
+The script also reads two registers through the debugger, as the hardware
+holds them: the S3 card's BAR0 (`e7000000`), and the VGA miscellaneous output
+register at port 0x3CC (`0xef`).
+
 ## Things we hit
 
 - **A copied `86box.cfg` carries its `uuid`.** With a network card configured,
