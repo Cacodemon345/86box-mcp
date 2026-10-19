@@ -74,3 +74,32 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
 - **Picking a map.** A parser for the map files' `DIM`, `UNIT` and `SQM` chunks found the stock
   two-player maps whose start locations a land path joins. Garden of War, the classic 1v1 map,
   came with the 1999 Battle.net Edition and isn't on the DOS discs.
+
+## Eight players
+
+The same setup with eight VMs (p1 to p8, copies of one VM without `mac` and `uuid` lines) on
+`plots.pud`, with CuteMouse and MOUSEBOX (examples/touch) in AUTOEXEC.BAT so `mouse_to` puts the
+pointer anywhere. The video runs from power-on to the end of the fight.
+
+- **The lobby:** p1 creates the game. The Players filter set to "5 to 8" puts PUDS straight into
+  the list, and plots.pud is the sixth entry in PUDS\MULTI. The others join, and each ticks
+  every Ready box, since only their own responds and the rows follow the order of joining.
+- **Simultaneous joins dropped a player:** twice, with all seven joining and clicking Ready in the
+  same instant, one player was dropped as the game started ("Player Hotel was dropped" on seven
+  screens, "Player Golf was dropped" on Hotel's). With joins and Ready clicks a second or so
+  apart, all eight stayed in. That's three runs, so a likely trigger rather than a proven one,
+  and possibly a Warcraft II bug that people never hit.
+- **The walk:** Warcraft II's pathfinding gives up on long orders, so we planned each route on the
+  map's terrain grid (the PUD's SQM chunk) and sent each peon one leg at a time, about 14 tiles,
+  with the Move button and a click on the minimap. Before each leg, each player's own unit was found
+  on its minimap (pure green, 0,255,0) and the route replanned from there. All eight arrived in
+  four legs.
+- **The chase:** a ring a few tiles wide where each peon attacks its clockwise neighbour never
+  fights: everyone chases a target that runs at the same speed after its own. The fight happens
+  with the eight on the tiles round one centre tile, each already next to its target.
+- **Traps on the way:**
+  - **The pointer hides the minimap:** after a minimap click the gauntlet covers the unit dots,
+    so move it away before looking.
+  - **The screen's edges scroll the map:** don't park the pointer there.
+  - **Gold mines don't show in the terrain grid**, so a planned tile next to one may be
+    unreachable.

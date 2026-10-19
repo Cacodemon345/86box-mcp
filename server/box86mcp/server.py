@@ -735,6 +735,7 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
         hold_ms = max(hold_ms, 120)               # MOUSEBOX takes moves on a timer tick (55 ms)
     for r in range(rounds):
         now = [(n, _vms[n].vm.auto, q[r]) for n, q in by_vm.items() if r < len(q)]
+        waits = {}                                # MOUSEBOX moves to see acknowledged
         for name, auto, (kind, arg) in now:            # press
             if kind == "keys":
                 auto.keys(True, arg)
@@ -745,11 +746,19 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
                 addr = _mousebox(vmobj)
                 if addr is None:
                     raise ValueError(f"MOUSEBOX isn't loaded in {name}")
-                _mousebox_send(vmobj, addr, *_mousebox_units(vmobj, addr, arg[0], arg[1]))
+                waits[name] = (vmobj, addr, _mousebox_send(vmobj, addr, *_mousebox_units(vmobj, addr, arg[0], arg[1])))
             else:
                 auto.mouse(arg[0], arg[1], arg[2])
         _align(states)                                    # key events take a little time each
         _run_in_lockstep(states, max(hold_ms, 1), _quantum_ms)
+        for _ in range(20):                               # MOUSEBOX takes a move on a timer tick,
+            waits = {n: w for n, w in waits.items()       # later if the program was in the driver
+                     if _mousebox_read(w[0], w[1])["ack"] != w[2]}
+            if not waits:
+                break
+            _run_in_lockstep(states, 30, _quantum_ms)
+        if waits:
+            raise AutomationError(f"MOUSEBOX didn't take the move in {', '.join(waits)} within 600 ms")
         for name, auto, (kind, arg) in now:            # release
             if kind == "keys":
                 auto.keys(False, list(reversed(arg)))

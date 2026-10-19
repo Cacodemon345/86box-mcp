@@ -111,6 +111,13 @@ side-by-side video, `record_start` on each, then `record_stop_all(video=..., spe
 give the VMs `net_01_net_type = nlswitch` with one `net_01_secret`, and no `mac` lines (copied VMs
 would share a MAC).
 
+**Act like a person with several VMs.** Input given to several networked VMs in the same instant
+(seven players clicking Ready together) can trip latent bugs a person never would: in Warcraft II
+it dropped a player twice. Stagger such input by a second or so unless simultaneity is the point.
+And don't expect exact replays across VMs: network packets travel in host time, so their order
+between VMs can differ from run to run. Judge such runs by outcome (who joined, who won, where
+units ended up), not by frames.
+
 **Work with V9x Remote Agent (Windows 9x).** V9x runs inside the guest and needs emulated time to
 pass. `release` before V9x calls, or send them while a `step` runs. No more than 4 V9x calls at
 once. After V9x calls have timed out while the machine was held, ping until it answers before
