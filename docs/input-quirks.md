@@ -47,7 +47,9 @@ Three things must be in place, or nothing happens:
    default). Without it, `tablet` fails with "no tablet configured". 86Box keeps running and
    nothing else changes; we tested that.
 2. **A driver must be loaded in the guest:** 3M's DOSTOUCH (TouchWare 3.4 for DOS), or MTMOUSE
-   from `examples/touch`, loaded after a mouse driver. Windows needs its own touch driver.
+   from `examples/touch`, loaded after a mouse driver. One of them, not both: each reads the
+   touchscreen on COM1. MTMOUSE needs the mouse driver; we ran DOSTOUCH with one too, and haven't
+   tried it without. Windows needs its own touch driver.
 3. **The guest must be past the point where the driver loads.** The BIOS setup, boot menus and
    anything before AUTOEXEC.BAT only see the relative mouse, so use `mouse` there.
 

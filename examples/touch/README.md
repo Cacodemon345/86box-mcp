@@ -13,7 +13,7 @@ explains which input reaches which program.
 
 1. **In `86box.cfg`,** under `[Input devices]`, set `tablet_type = microtouch_touchpen`. That's
    86Box's 3M MicroTouch serial touchscreen, on COM1.
-2. **In the guest,** load a mouse driver, then a touch driver:
+2. **In the guest,** load a mouse driver, then one touch driver, not both (each reads COM1):
    - **3M's DOSTOUCH** (TouchWare 3.4 for DOS) for most programs. Set `CursorOffset=0` in
      `DOSTOUCH.INI`.
    - **MTMOUSE** for programs that follow mickeys and draw their own pointer, such as Warcraft
