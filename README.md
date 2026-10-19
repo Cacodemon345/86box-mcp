@@ -304,7 +304,7 @@ passes the same time on the other, 10 ms at a time, so neither game sees its
 peer stall. `record_stop_all` rendered the video, with both screens on their
 shared emulated clock. See [`examples/warcraft2`](examples/warcraft2).
 
-![Eight 86Box VMs playing Warcraft II: a ring of peons attacking clockwise at once](docs/images/warcraft2-8players.gif)
+![Eight 86Box VMs playing Warcraft II, from power-on to the ring attack](docs/images/warcraft2-8players.gif)
 
 Then eight. All eight VMs boot from power-on and join one game on
 `plots.pud`. Each peon walks to a ring round one tile, on routes planned from

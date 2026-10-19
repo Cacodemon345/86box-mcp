@@ -77,7 +77,7 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
 
 ## Eight players
 
-![The ring attack](../../docs/images/warcraft2-8players.gif)
+![The whole eight-player run, from power-on](../../docs/images/warcraft2-8players.gif)
 
 How Warcraft II reads the mouse, and the traps in automating it, are in
 [docs/input-quirks.md](../../docs/input-quirks.md#warcraft-ii-dos-v150-2x).
