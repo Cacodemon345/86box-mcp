@@ -93,6 +93,20 @@ Three things must be in place, or nothing happens:
 The relative mouse keeps working alongside a touchscreen: `mouse` goes to the mouse and `tablet`
 to the touchscreen.
 
+### Touch drivers
+
+If you can't or won't load our TSR, these are the drivers we know of for 86Box's MicroTouch
+touchscreen. Tested under DOS 6.22 in 86Box, with Warcraft II as the hard case:
+
+| Driver | Where from | Works with 86Box's touchscreen | Pointer | Clicks | Programs that draw their own pointer (Warcraft II) | Memory |
+|---|---|---|---|---|---|---|
+| **3M DOSTOUCH 3.5** (TouchWare 3.4 for DOS, 1997) | 3M's driver CD ("3M Touchscreen Monitor" on the Internet Archive), `Archived/Software/TouchWare/DOSWin31` | yes | on the touch (within 8 units, its text-mode rounding) | left button while touching (`TouchMode` 0 or 2) | a first touch on a new spot only moves the pointer, a second clicks; touches can't get past a range the program narrows (Warcraft II's left panel in-game) | 14.9 KB, plus a mouse driver if you want the relative mouse too |
+| **EETI TouchKit for DOS 6.00** | microtouch.com's 2021 "DOS" download | no: it speaks eGalax controllers' protocol, not MicroTouch's | | | | |
+| **3M MicroCal** | the same CD, `Utils/Microcal` | it's the calibration and diagnostics utility, not a driver; it writes the controller's NVRAM | | | | |
+| **Our MOUSEBOX /T** | `examples/touch` | yes | on the touch | left button, 110 ms after the touch | yes, including the panel | about 2 KB, after a mouse driver |
+
+For Windows 3.x and 9x, 3M's TouchWare for those systems is on the same CD; we haven't tried it.
+
 ### Calibration
 
 Real touchscreens need calibrating to the picture. 86Box's MicroTouch starts out 1:1: uncalibrated,
