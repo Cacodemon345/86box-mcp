@@ -252,7 +252,8 @@ screen even after it narrows the range.
   - **Mutual chases:** units ordered to attack in a circle chase each other for ever at equal
     speed. Start them already next to their targets.
   - **Gold mines aren't in the terrain grid** (the PUD's SQM chunk), so a planned tile beside one
-    may be unreachable.
+    may be unreachable, or be the mine itself: a peasant sent onto a mine with the Move button
+    and a left click goes mining (seen in the eight-player run), and stops fighting.
 
 ### Arkanoid II (DOS)
 
