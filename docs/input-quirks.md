@@ -158,6 +158,44 @@ Measured with `MEM /C`, all in conventional memory (none tried in upper memory):
 
 For programs short of conventional memory, CuteMouse + MOUSEBOX is much the smallest.
 
+### MTMOUSE (MOUSEBOX's predecessor)
+
+MTMOUSE was our first touch TSR, 1.8 KB resident. Its source is in the history:
+`git show 4e32cd4:examples/touch/mtmouse.s`. It reads the touchscreen on COM1 and drives the mouse driver already loaded:
+
+- It sets the driver's position with function 4.
+- It holds the left button while the finger is down, in functions 3, 5 and 6 and in event-handler
+  calls.
+- It sends the program's event handler the move in mickeys, through a stub it installs in place of
+  the program's handler, which adds the touches' mickeys to the driver's running counts.
+- Each touch goes as two moves: far up and left, so both the driver's pointer and the program's
+  own stop at the corner, then the touch's distance from the corner.
+- The press arrives two timer ticks (about 110 ms) after the touch, once the program has seen the
+  pointer arrive.
+
+What we learned building it, in order:
+
+1. **Position alone isn't enough.** Setting the driver's position moved Warcraft II's pointer
+   nowhere: the game follows mickeys.
+2. **Mickeys relative to the driver's pointer drift.** The first version sent the move from where
+   the driver had the pointer. Warcraft II also sets the driver's position itself, so the game's
+   pointer and the driver's disagree, and touches went the wrong distance. Going through the
+   corner fixed it.
+3. **The move must come before the press, in separate events.** Sent in one handler call, the
+   game saw the press at the pointer's old place.
+4. **The press must wait.** Even after the move, the game only clicks a button the pointer was
+   already over, so the press is delayed two timer ticks.
+5. **The handler's counts are running totals.** The program works out motion from the change in
+   SI and DI, so the touches' mickeys must stay added to every later call (the stub), or the
+   pointer jumps back at the next real mouse event.
+6. **Scaling to the current range is wrong** when a program narrows its range later. MTMOUSE
+   scaled touches over the range the program had just set, so in Warcraft II's game screen,
+   touches aimed at the left panel landed in the map. MOUSEBOX scales over the widest range
+   instead.
+7. **It never fed the motion counters** (function 0Bh), so programs reading those ignored touches.
+
+MOUSEBOX keeps all of this and fixes 6 and 7.
+
 ### MOUSEBOX /T
 
 With `/T`, MOUSEBOX also reads the touchscreen on COM1 and moves the pointer as above, holding the
