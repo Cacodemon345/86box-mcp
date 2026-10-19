@@ -26,6 +26,18 @@ Later fixes and additions, all merged by 2026-10-18:
 | [#8397](https://github.com/86Box/86Box/pull/8397) | `--automation-insecure`: TCP without the token (`BOX86_INSECURE=1`) |
 | [#8402](https://github.com/86Box/86Box/pull/8402) | Warning dialogs don't stop an automated 86Box, and a CD image that won't load is reported to the client |
 
+Merged on 2026-10-19:
+
+| Pull request | What it adds |
+|---|---|
+| [#8405](https://github.com/86Box/86Box/pull/8405) | `tablet x y buttons` / `tablet out`: absolute input for a configured tablet or touchscreen (the `tablet` tool) |
+
+Open:
+
+| Pull request | What it adds |
+|---|---|
+| [#8416](https://github.com/86Box/86Box/pull/8416) | `regs` returns CR2, CR3, CR4, the debug registers, the descriptor caches, GDTR/IDTR/LDTR/TR, CPL, SMM and the TSC; a new `fpu` command returns the x87 and MMX registers (`registers`, `fpu_registers`). There is no CR1 on x86 |
+
 `86BOX_COMMIT` names an upstream commit with all of them, the merge of #8402.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.

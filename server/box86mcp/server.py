@@ -1500,8 +1500,23 @@ def diff_memory(change: str = "changed", name: str = "default", size: int = 1, s
 
 @tool()
 def registers() -> dict:
-    """CPU registers at the current instruction boundary (sampled between 1 ms quanta)."""
+    """CPU registers at the current instruction boundary (sampled between 1 ms quanta).
+
+    General registers, eip, eflags, segment selectors and cr0 on every CPU. From the 286, each
+    segment's descriptor cache (ds_base, ds_limit, ds_ar...; ar = descriptor bytes 5-6), gdtr/idtr
+    base and limit, ldtr and tr, and cpl. From the 386, cr2 (last page-fault address), cr3 (page
+    directory base), dr0-dr3, dr6, dr7 and smm. cr4 and tsc where the CPU has them. x86 has no CR1.
+    The x87 and MMX registers are in fpu_registers(). Needs 86Box with 86Box/86Box#8416 for more
+    than eip, eflags, selectors, cs_base and cr0."""
     return vm().auto.regs()
+
+
+@tool()
+def fpu_registers() -> dict:
+    """The x87 FPU: fcw, fsw (with TOP), ftw (full tag word, 2 bits per physical register), top,
+    st0-st7 as 20 hex digits (sign+exponent, then significand, as FSAVE stores them), and with
+    MMX mm0-mm7 as 16 hex digits. Fails on a machine without an FPU. Needs 86Box/86Box#8416."""
+    return vm().auto.fpu()
 
 
 # Debugging, through 86Box's GDB stub ------------------------------------------------------------

@@ -418,7 +418,7 @@ These work with any guest OS:
 | `together(actions)` | Input to several VMs at the same emulated instant, different for each if you like |
 | `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock |
 | `screenshot`, `screen_text`, `wait_for_text` | The frame; text-mode screen as text; run until text appears |
-| `read_memory`, `write_memory`, `wait_for_memory`, `registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`), and CPU registers |
+| `read_memory`, `write_memory`, `wait_for_memory`, `registers`, `fpu_registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`); CPU registers, including control, debug and descriptor-table registers and segment caches, and the x87/MMX registers (these need 86Box [#8416](https://github.com/86Box/86Box/pull/8416)) |
 | `find_memory`, `snapshot_memory`, `diff_memory` | Search memory for bytes, text or a number; snapshot it, then keep only the addresses that changed the way you expect (increased, decreased, equal to a value) to find a game's variables |
 | `serial_read`, `wait_for_serial` | Guest output on COM1 |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |

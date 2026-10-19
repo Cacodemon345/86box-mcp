@@ -198,6 +198,11 @@ class Automation:
         r.pop("ok", None)
         return r
 
+    def fpu(self) -> dict:
+        r = self.call("fpu")
+        r.pop("ok", None)
+        return r
+
     def wait_text(self, text: str, timeout_ms: int) -> dict:
         return self.call(f"wait text {int(timeout_ms)} {text}")
 

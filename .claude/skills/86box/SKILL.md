@@ -65,7 +65,7 @@ the cases above, and say why.
 
 ## Memory and state
 
-`read_memory`, `write_memory`, `wait_for_memory`, `registers`. To find a game's variable:
+`read_memory`, `write_memory`, `wait_for_memory`, `registers` (also CR2-CR4, DR0-DR7, GDTR/IDTR/LDTR/TR and segment caches; `fpu_registers` for x87/MMX). To find a game's variable:
 `snapshot_memory`, make it change (lose a life, score), `diff_memory("decreased")`, repeat until a
 few addresses are left. `find_memory(text=...)` finds strings, for example text a program is
 showing.

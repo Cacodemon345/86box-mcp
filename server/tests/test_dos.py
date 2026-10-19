@@ -311,3 +311,31 @@ def test_cfg_rewrite_keeps_line_endings(tmp_path):
         lines = [l for l in cfg.read_text().splitlines() if not l.startswith("uuid")]
         _rewrite_cfg(cfg, lines)
         assert cfg.read_bytes() == nl.join(["[General]", "vid_renderer = qt_software", ""]).encode()
+
+
+def test_control_debug_and_fpu_registers(dos_vm, tmp_path):
+    a = dos_vm.auto
+    assert a.wait_text("C:\\>", 60000)["matched"]
+    # fninit; fldpi; fld1; dr0 = 0x12345; cr3 = 0x123000; ebx = 0xC0DEF00D; jmp $
+    prog = tmp_path / "REGS.COM"
+    prog.write_bytes(bytes.fromhex("dbe3d9ebd9e866b8452301000f23c066b8003012000f22d866bb0df0dec0ebfe"))
+    dos_vm.load_floppy(dos_vm.make_floppy([prog]))
+    type_line(a, "A:\\REGS.COM")
+    for _ in range(40):
+        a.step(250)
+        r = a.regs()
+        if r["ebx"] == 0xC0DEF00D:
+            break
+    assert r["ebx"] == 0xC0DEF00D
+    if "cr2" not in r:
+        import pytest
+        pytest.skip("86Box without 86Box/86Box#8416 (control and FPU registers)")
+    assert r["dr0"] == 0x12345 and r["cr3"] == 0x123000 and "cr1" not in r
+    assert r["cpl"] == 0 and r["smm"] == 0 and not r["cr0"] & 1
+    assert r["ds_base"] == r["ds"] * 16 and r["ds_limit"] == 0xFFFF
+    assert r["cs_base"] == r["cs"] * 16 and r["idtr_base"] == 0 and r["idtr_limit"] == 0x3FF
+    f = a.fpu()
+    assert f["fcw"] == 0x37F and f["top"] == 6 and f["fsw"] & 0x3800 == 0x3000
+    assert f["ftw"] == 0x0FFF                         # physical registers 6 and 7 valid, the rest empty
+    assert f["st0"] == "3fff8000000000000000"         # 1.0
+    assert f["st1"].startswith("4000c90fdaa22168c")  # pi (exact with softfloat, as a double without)
