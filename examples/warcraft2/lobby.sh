@@ -13,7 +13,9 @@ cd "$1"
 CD=$2
 C=${CTL:-python -m box86mcp.ctl}
 S() { $C call step_all "{\"ms\": $1}" | tail -1; }
-both() { for p in p1 p2; do $C call "$1" "$(echo "$2" | sed "s/VM/$p/")" >/dev/null; done; }
+VMS=${VMS:-p1 p2}
+# each TOOL ARGS: call TOOL on every VM in turn, with VM in ARGS replaced by its name
+each() { for p in $VMS; do $C call "$1" "$(echo "$2" | sed "s/VM/$p/")" >/dev/null; done; }
 rm -rf rec; mkdir -p rec/p1 rec/p2
 for p in p1 p2; do
   $C call vm_start "{\"vm\": \"$p\", \"vm_dir\": \"$PWD/$p\"}" | tail -1
@@ -21,15 +23,15 @@ for p in p1 p2; do
   $C call record_start "{\"vm\": \"$p\", \"directory\": \"$PWD/rec/$p\", \"interval_ms\": 100}" >/dev/null
 done
 S 30000
-both type_text '{"vm": "VM", "text": "CD \\WAR2X\nWAR2\n"}'
+each type_text '{"vm": "VM", "text": "CD \\WAR2X\nWAR2\n"}'
 S 15000
-for i in 1 2 3; do both press_keys '{"vm": "VM", "keys": ["esc"]}'; S 3000; done
-both press_keys '{"vm": "VM", "keys": ["m"]}'; S 2000
-both press_keys '{"vm": "VM", "keys": ["backspace","backspace","backspace","backspace","backspace","backspace","backspace","backspace","backspace"]}'
+for i in 1 2 3; do each press_keys '{"vm": "VM", "keys": ["esc"]}'; S 3000; done
+each press_keys '{"vm": "VM", "keys": ["m"]}'; S 2000
+each press_keys '{"vm": "VM", "keys": ["backspace","backspace","backspace","backspace","backspace","backspace","backspace","backspace","backspace"]}'
 $C call type_text '{"vm": "p1", "text": "Alpha\n"}' >/dev/null
 $C call type_text '{"vm": "p2", "text": "Bravo\n"}' >/dev/null
 S 2000
-both press_keys '{"vm": "VM", "keys": ["down","down","c"]}'; S 4000
+each press_keys '{"vm": "VM", "keys": ["down","down","c"]}'; S 4000
 # p1 creates, and opens Select Scenario (the map is chosen afterwards)
 $C call press_keys '{"vm": "p1", "keys": ["enter"]}' >/dev/null; S 3000
 $C call mouse_to '{"vm": "p1", "x": 512, "y": 381}' | tail -1; $C call mouse '{"vm": "p1", "left": true}' >/dev/null; S 2000
