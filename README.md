@@ -309,7 +309,8 @@ shared emulated clock. See [`examples/warcraft2`](examples/warcraft2).
 Then eight. All eight VMs boot from power-on and join one game on
 `plots.pud`. Each peon walks to a ring round one tile, on routes planned from
 the map's terrain and sent leg by leg. Then every peon attacks its clockwise
-neighbour in the same instant. Five Defeat screens follow within ten seconds.
+neighbour in the same instant. Five Defeat screens follow within ten seconds,
+and after some fumbling by the agent, left in, Foxtrot is the last one standing.
 Clicks go through MOUSEBOX, which puts the pointer where `mouse_to` says,
 however the game reads the mouse. What the game taught us about input is in
 [docs/input-quirks.md](docs/input-quirks.md), and the run itself in
