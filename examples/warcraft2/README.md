@@ -28,7 +28,7 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
    BOX86_DOS_BASE_IMG=... python examples/warcraft2/prepare.py --out WORK/p1 \
        --dos-files DOSFILES --net-kit NETKIT --mouse CTMOUSE.EXE --war2x WAR2X
    cp -r WORK/p1 WORK/p2
-   sed -i '/^mac/d;/^uuid/d' WORK/p2/86box.cfg
+   sed -i '/^mac *=/d;/^uuid *=/d' WORK/p2/86box.cfg
    ```
 
    Each VM gets an NE2000 at port 300, IRQ 3, on 86Box's local switch (`net_01_net_type =

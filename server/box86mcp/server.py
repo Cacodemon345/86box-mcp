@@ -681,6 +681,80 @@ def press_keys(keys: list[str], hold_ms: int = 60, gap_ms: int = 60) -> str:
     return f"pressed {len(keys)} key(s); {_time_note(v.auto.status())}"
 
 
+@tool()
+def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
+    """Give several VMs input at the same emulated time, e.g. every player's order on one game tick.
+
+    actions: one per VM, each {"vm": name} plus one of
+      "keys": ["esc", "ctrl+c", ...]   key combos, pressed one after another
+      "text": "Alpha\n"                typed
+      "tablet": [x, y] or [x, y, buttons]   a touch at that pixel (see tablet)
+      "mouse": [dx, dy] or [dx, dy, buttons]   relative motion, with buttons
+    In each round, every VM gets its next press at once (a key or character down, the finger down,
+    the mouse moved and its buttons down); then the VMs run hold_ms together, everything is
+    released, and they run gap_ms. Keys and text go one per round, so the k-th key reaches every VM
+    at the same time. The VMs must all be held and in one group (see vm_group).
+    """
+    by_vm = {}
+    for a in actions:
+        name = a.get("vm")
+        kinds = [k for k in ("keys", "text", "tablet", "mouse") if k in a]
+        if name is None or len(kinds) != 1:
+            raise ValueError(f"each action needs a vm and exactly one of keys, text, tablet, mouse: {a}")
+        if name in by_vm:
+            raise ValueError(f"two actions for {name}")
+        kind = kinds[0]
+        if kind == "keys":
+            seq = [("keys", K.parse_combo(c)) for c in a["keys"]]
+        elif kind == "text":
+            seq = []
+            for ch in a["text"]:
+                code, shifted = K.char_keys(ch)
+                seq.append(("keys", ([K.scancode("shift")] if shifted else []) + [code]))
+        else:
+            v = list(a[kind]) + ([1] if kind == "tablet" else [0]) * (3 - len(a[kind]))
+            seq = [(kind, [int(n) for n in v[:3]])]
+        by_vm[name] = seq
+    _save_current()
+    for name in by_vm:
+        st = _vms.get(name)
+        if st is None or st.vm is None or not st.vm.running():
+            raise AutomationError(f"no VM running called {name!r}")
+        if not st.held:
+            raise ValueError(f"{name} isn't held: together needs held VMs (hold_all)")
+    groups = {_group_of(n) for n in by_vm}
+    if len(groups) != 1:
+        raise ValueError(f"the VMs are in different groups: {sorted(groups)}")
+    states = [(n, st) for n, st in _group_states(groups.pop()) if st.held]
+    _align(states)
+    rounds = max(len(q) for q in by_vm.values())
+    for r in range(rounds):
+        now = [(n, _vms[n].vm.auto, q[r]) for n, q in by_vm.items() if r < len(q)]
+        for name, auto, (kind, arg) in now:            # press
+            if kind == "keys":
+                auto.keys(True, arg)
+            elif kind == "tablet":
+                auto.call(f"tablet {arg[0]} {arg[1]} {arg[2]}")
+            else:
+                auto.mouse(arg[0], arg[1], arg[2])
+        _align(states)                                    # key events take a little time each
+        _run_in_lockstep(states, max(hold_ms, 1), _quantum_ms)
+        for name, auto, (kind, arg) in now:            # release
+            if kind == "keys":
+                auto.keys(False, list(reversed(arg)))
+            elif kind == "tablet":
+                auto.call(f"tablet {arg[0]} {arg[1]} 0")
+                auto.call("tablet out")
+            elif arg[2]:
+                auto.mouse(0, 0, 0)
+        _align(states)
+        if gap_ms > 0:
+            _run_in_lockstep(states, gap_ms, _quantum_ms)
+    end = {n: st.vm.auto.status()["ms"] for n, st in states}
+    return (f"{len(by_vm)} VMs got their input together in {rounds} round(s); "
+            f"now t={max(end.values())}ms on all {len(states)} VMs of the group")
+
+
 def _type(text: str, ms_per_key: int) -> None:
     v = vm()
     shift = K.scancode("shift")
@@ -717,6 +791,29 @@ def mouse(dx: int = 0, dy: int = 0, left: bool = False, right: bool = False, mid
     if buttons and release:
         v.auto.mouse(0, 0, 0)
         _advance(hold_ms)
+    return _time_note(v.auto.status())
+
+
+@tool()
+def tablet(x: int, y: int, buttons: int = 1, hold_ms: int = 30, release: bool = True) -> str:
+    """Touch the screen, or put a tablet's pen, at pixel (x, y) of the frame (screenshot coordinates):
+    absolute input, for a VM with a touch screen, tablet or light pen configured (86box.cfg
+    [Input devices] tablet_type, e.g. microtouch_touchpen on COM1) and its guest driver loaded.
+
+    buttons: 1 = touching (the pen's tip), 0 = hovering, other bits for a pen's side buttons.
+    Runs hold_ms, then lifts the finger or pen away, unless release=False, which leaves it there
+    (the next tablet call moves it: drag by calling again with release=False, then once more to
+    let go). The relative mouse keeps working alongside: mouse() goes to the mouse, tablet() to the
+    tablet. Needs 86Box with the automation "tablet" command.
+    """
+    v = vm()
+    v.auto.call(f"tablet {int(x)} {int(y)} {int(buttons)}")
+    _advance(hold_ms)
+    if release:
+        if buttons:
+            v.auto.call(f"tablet {int(x)} {int(y)} 0")
+            _advance(hold_ms)
+        v.auto.call("tablet out")
     return _time_note(v.auto.status())
 
 

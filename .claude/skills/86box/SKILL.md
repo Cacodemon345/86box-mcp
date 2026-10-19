@@ -51,6 +51,12 @@ the cases above, and say why.
   (a dropdown that picks on release), and the next `mouse` call lets go. `mouse_to(x, y)` closes the
   loop by finding the pointer on screen, or in memory if the program publishes it; `mouse_drag` for
   drags. The hotspot is the pointer's tip (top-left of an arrow or a pointing finger).
+- **Touch:** `tablet(x, y)` touches at a screenshot pixel, if the VM has 86Box's MicroTouch
+  touchscreen and a touch driver is loaded in the guest (examples/touch); otherwise it fails or does
+  nothing. Before the driver loads (BIOS, boot menus) use `mouse`. Some programs ignore touches:
+  docs/input-quirks.md in the 86box-mcp repo lists how programs read input, and their oddities.
+- **Several VMs at once:** `together([{"vm": "p1", "keys": [...]}, {"vm": "p2", "tablet": [x, y]}, ...])`
+  gives each its input at the same emulated instant.
 - **DOS:** `dos_run("command")` types it and waits for the prompt. `dos_install_files` copies onto C:
   while the VM is stopped; `dos_put_floppy` or `cdrom_insert(files=[...])` while it runs.
 

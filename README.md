@@ -402,6 +402,8 @@ These work with any guest OS:
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
 | `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion, with buttons (`release=False` keeps them down); put the pointer at a screen position (closing the loop on where it lands); drag |
+| `tablet(x, y)` | Touch the screen at a pixel: absolute input, for a VM with 86Box's MicroTouch touchscreen and a touch driver in the guest ([examples/touch](examples/touch)) |
+| `together(actions)` | Input to several VMs at the same emulated instant, different for each if you like |
 | `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock |
 | `screenshot`, `screen_text`, `wait_for_text` | The frame; text-mode screen as text; run until text appears |
 | `read_memory`, `write_memory`, `wait_for_memory`, `registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`), and CPU registers |
@@ -411,6 +413,8 @@ These work with any guest OS:
 | `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time; hard reset or Ctrl+Alt+Del |
 | `breakpoint_set`, `run_until_break`, `step_instructions`, `debug_continue` | With `vm_start(debugger=True)` and 86Box built with `-D GDBSTUB=ON`: execution breakpoints and memory watchpoints, single instructions, all while held |
 | `io_read`, `io_write`, `pci_scan`, `pci_config_read` | Also with the debugger: port I/O as the CPU would do it, and PCI configuration space |
+
+Programs read the mouse and keyboard in different ways, and input that works in one can fail in another: [docs/input-quirks.md](docs/input-quirks.md) lists what we've found, program by program.
 
 DOS helpers assume DOS and FAT disks: `dos_create_vm` (VM with a bootable DOS
 disk; takes `config` and `nvr` like `vm_create`), `dos_install_files` (copy files of any size onto C: while stopped),
