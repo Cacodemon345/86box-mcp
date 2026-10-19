@@ -239,6 +239,20 @@ screen even after it narrows the range.
 - **The lobby:** typed letters go into the chat line. Enter or a click starts things, and a
   click with the pointer not exactly on the button does nothing.
 - **Version 1.0's IPX games can't be joined:** use 1.2 or later.
+- **Reading the game from the screen:**
+  - **Your own units** are pure green (0, 255, 0) on the minimap, one pixel per tile on a
+    128x128 map. Gold mines are yellow squares, and the view is a white box.
+  - **The pointer covers the minimap's dots** after a click there: move it onto the map before
+    looking.
+  - **Parking at the screen's edge scrolls the map:** park in the middle of the map view.
+  - **A selected unit** has a green box round it on the map, the best way to find it exactly.
+- **Orders that look right but aren't:**
+  - **Long moves stall:** the pathfinding gives up on them. Send legs of about 14 tiles,
+    replanning from where the unit really is.
+  - **Mutual chases:** units ordered to attack in a circle chase each other for ever at equal
+    speed. Start them already next to their targets.
+  - **Gold mines aren't in the terrain grid** (the PUD's SQM chunk), so a planned tile beside one
+    may be unreachable.
 
 ### Arkanoid II (DOS)
 
