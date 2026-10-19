@@ -48,8 +48,8 @@ Three things must be in place, or nothing happens:
    nothing else changes; we tested that.
 2. **A driver must be loaded in the guest:** 3M's DOSTOUCH (TouchWare 3.4 for DOS), or MTMOUSE
    from `examples/touch`, loaded after a mouse driver. One of them, not both: each reads the
-   touchscreen on COM1. MTMOUSE needs the mouse driver; we ran DOSTOUCH with one too, and haven't
-   tried it without. Windows needs its own touch driver.
+   touchscreen on COM1. MTMOUSE needs the mouse driver. DOSTOUCH works without one (it provides
+   INT 33h itself), but then the relative `mouse` no longer moves the pointer. Windows needs its own touch driver.
 3. **The guest must be past the point where the driver loads.** The BIOS setup, boot menus and
    anything before AUTOEXEC.BAT only see the relative mouse, so use `mouse` there.
 
@@ -81,9 +81,24 @@ a MicroTouch.
 - **TouchMode:** with `TouchMode=0` and `TouchMode=2`, the left button is down while the finger
   is. With `TouchMode=1`, our touches never pressed the button, at least not with touches of
   0.3 s.
-- **Programs that follow mickeys:** DOSTOUCH moves the driver's position but sends no matching
-  mickeys, so these programs' own pointers stay where they were, and a click lands at the old
-  spot. Warcraft II is one of them.
+- **With or without a mouse driver:** 3M's readme asks for a standard Microsoft driver (it warns
+  about some Logitech and Compaq ones). With Microsoft's MOUSE.COM (DOS 6.22's, 8.20) under it,
+  with CuteMouse under it, and alone, DOSTOUCH behaved the same in Warcraft II. Alone, the
+  relative mouse stopped moving the pointer.
+- **Programs that follow mickeys:** see Warcraft II below; touches reach them through the
+  driver's position, which the program may clamp.
+
+### Memory
+
+Measured with `MEM /C`, all in conventional memory (none tried in upper memory):
+
+| Setup | Resident |
+|---|---|
+| CuteMouse 2.1 + MTMOUSE | 3.1 KB + 1.8 KB = 4.9 KB |
+| Microsoft MOUSE.COM 8.20 + DOSTOUCH 3.5 | 17.3 KB + 14.9 KB = 32.2 KB |
+| DOSTOUCH 3.5 alone | 14.9 KB |
+
+For programs short of conventional memory, CuteMouse + MTMOUSE is much the smallest.
 
 ### MTMOUSE
 
@@ -105,6 +120,12 @@ It doesn't feed function 0Bh's counters.
 
 ### Warcraft II (DOS, v1.50 "2X")
 
+- **Touches with DOSTOUCH** (under Microsoft's MOUSE.COM or CuteMouse, the same): the pointer lands
+  on the touch, within 3 pixels, but a touch on a new spot only moves it; a second touch there
+  clicks. The game seems to click only a button the pointer was already over. In a game, touches
+  can't reach the left panel (minimap, unit and command buttons): the pointer stops at x 176, the
+  edge of the map view. The game sets the driver's range to the map view while playing, and moves
+  its own pointer into the panel from mickeys alone. The relative `mouse` reaches the panel.
 - **The pointer:** the game follows the handler's mickeys and draws its own pointer, at half a
   pixel per mickey on both axes. The screen is 640x480, but the game sets the driver's range to
   x 0..1278 and y 0..479 (functions 7 and 8): twice the width, so at the driver's default ratios
@@ -139,6 +160,18 @@ The game reads only the keypad keys, not the extended arrow keys.
 - **Setup hides the pointer** in its keyboard-driven dialogs, so `mouse_to` can't find it: use
   the keyboard there.
 - **Moving clocks** (Solitaire's status bar) can fool `mouse_to`'s frame comparison.
+
+## Others with the same problems
+
+The way programs keep their own pointer from mickeys trips up other absolute-mouse projects too:
+
+- [pcrecomp #76](https://github.com/sp00nznet/pcrecomp/pull/76) found Theme Park's cursor drifting
+  with an absolute pointer, because the game moves its cursor by how far the driver's position
+  changed, and its edge scrolling needs moves past the edge. They added relative motion alongside.
+- [VBMOUSE](https://git.javispedro.com/cgit/vbados.git/about/), the DOS mouse driver for VirtualBox
+  and VMware (about 10 KB), notes that programs which draw their own cursor or compute the position
+  from relative motion go "jumpy" or stuck with absolute input, and turns it off for them
+  (`vbmouse integ off`).
 
 ## Keyboard
 
