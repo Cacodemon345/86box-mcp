@@ -51,6 +51,9 @@ the cases above, and say why.
   (a dropdown that picks on release), and the next `mouse` call lets go. `mouse_to(x, y)` closes the
   loop by finding the pointer on screen, or in memory if the program publishes it; `mouse_drag` for
   drags. The hotspot is the pointer's tip (top-left of an arrow or a pointing finger).
+- **DOS pointing:** with MOUSEBOX.COM loaded after the mouse driver (examples/touch), `mouse_to` puts
+  the pointer there directly, for every way programs read the mouse, with no screen search or
+  corner parking; then click with `mouse(left=True)`. `mouse_state` shows how the program reads it.
 - **Touch:** `tablet(x, y)` touches at a screenshot pixel, if the VM has 86Box's MicroTouch
   touchscreen and a touch driver is loaded in the guest (examples/touch); otherwise it fails or does
   nothing. Before the driver loads (BIOS, boot menus) use `mouse`. Some programs ignore touches:

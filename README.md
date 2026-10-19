@@ -401,7 +401,7 @@ These work with any guest OS:
 | `measure_speed(seconds, paced)` | Emulated seconds per wall second: paced (does it keep up with real time?) or unpaced (throughput, to compare 86Box builds, each started with `vm_start(binary=...)`) |
 | `act(hold_keys, ms)` | Hold keys for *ms*, release, return the frame: one game turn |
 | `press_keys`, `type_text` | Keyboard |
-| `mouse`, `mouse_to(x, y)`, `mouse_drag` | Relative motion, with buttons (`release=False` keeps them down); put the pointer at a screen position (closing the loop on where it lands); drag |
+| `mouse`, `mouse_to(x, y)`, `mouse_drag`, `mouse_state` | Relative motion, with buttons (`release=False` keeps them down); put the pointer at a screen position (closing the loop on where it lands, or directly through MOUSEBOX in DOS, [examples/touch](examples/touch)); drag; how a DOS program reads the mouse |
 | `tablet(x, y)` | Touch the screen at a pixel: absolute input, for a VM with 86Box's MicroTouch touchscreen and a touch driver in the guest ([examples/touch](examples/touch)) |
 | `together(actions)` | Input to several VMs at the same emulated instant, different for each if you like |
 | `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock |

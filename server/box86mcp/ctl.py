@@ -239,7 +239,7 @@ def render_timeline(frames_dir: Path, output: Path, calls_log: Path | None = Non
         calls = [json.loads(l) for l in open(calls_log)]
         calls = [c for c in calls if c.get("start_ms") is not None]
     # Real speed only around input (pointer moves, typing, media swaps); polling and waiting fast-forward.
-    interactive = {"mouse", "tablet", "together", "mouse_to", "mouse_drag", "press_keys", "type_text", "act", "floppy_insert",
+    interactive = {"mouse", "tablet", "together", "mouse_to", "mouse_state", "mouse_drag", "press_keys", "type_text", "act", "floppy_insert",
                    "floppy_eject", "cdrom_insert", "cdrom_eject", "reset", "dos_put_floppy", "note"}
     active = [(c["start_ms"], (c["end_ms"] or c["start_ms"]) + linger_ms) for c in calls if c["tool"] in interactive]
 

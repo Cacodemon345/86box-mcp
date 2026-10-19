@@ -7,7 +7,10 @@
      HANDLER  x y b          the position the event handler (function 0Ch) was given
      FOLLOW   x y            a pointer kept from the handler's mickey counts (SI, DI), the way
                              programs that draw their own pointer do; /F sets its scale
-     COUNTERS x y            function 0Bh: mickeys moved since the last call, accumulated
+     COUNTERS x y  cx cy     with /C: function 0Bh, mickeys moved since the last call,
+                             accumulated, and a pointer kept from them (scaled and clamped like
+                             FOLLOW). Off by default: CuteMouse resets the handler's mickey counts
+                             (SI, DI) when 0Bh is read, which would upset FOLLOW.
      PRESS    n tick pit     left presses seen by the handler, and when the last one came
                              (BIOS tick, then PIT channel 0 count: compare VMs given input together)
      KEY      n last tick pit  keys, likewise (polled, so within a loop pass)
@@ -18,8 +21,9 @@
      /X:min,max  /Y:min,max  the range set with functions 7 and 8 (default: the driver's own)
      /F:n        FOLLOW moves one pixel per n mickeys (default 2), clamped to /W:width,height
                  (default 640,480)
+     /C          read the motion counters (function 0Bh) too
      /T          raw touch screen on COM1. It takes COM1's interrupt away from a touch driver
-                 (MTMOUSE, DOSTOUCH) while INPTEST runs, so those see no touches meanwhile.
+                 (MOUSEBOX /T, DOSTOUCH) while INPTEST runs, so those see no touches meanwhile.
    Esc quits. Build with DJGPP. */
 #include <conio.h>
 #include <dpmi.h>
@@ -111,7 +115,7 @@ static void touch_poll(void)
 int main(int argc, char **argv)
 {
     __dpmi_regs r;
-    int keys = 0, lastkey = 0, cx = 0, cy = 0, raw = 0;
+    int keys = 0, lastkey = 0, cx = 0, cy = 0, raw = 0, counters = 0, cfx, cfy;
     unsigned long key_tick = 0;
     unsigned key_pit = 0;
 
@@ -130,8 +134,10 @@ int main(int argc, char **argv)
                 width = a, height = b;
         } else if ((o[0] == '/' || o[0] == '-') && (o[1] | 0x20) == 't')
             raw = 1;
+        else if ((o[0] == '/' || o[0] == '-') && (o[1] | 0x20) == 'c')
+            counters = 1;
     }
-    fx = width / 2; fy = height / 2;
+    fx = cfx = width / 2; fy = cfy = height / 2;
 
     cb.pm_offset = (unsigned long) handler;
     if (_go32_dpmi_allocate_real_mode_callback_retf(&cb, &cbregs)) { cprintf("no callback\r\n"); return 1; }
@@ -150,13 +156,21 @@ int main(int argc, char **argv)
             keys++; lastkey = c; key_tick = ticks(); key_pit = pit();
             if (c == 27) break;
         }
-        memset(&r, 0, sizeof r); r.x.ax = 0x0B; int33(&r);
-        cx += (short) r.x.cx; cy += (short) r.x.dx;
+        if (counters) {
+            memset(&r, 0, sizeof r); r.x.ax = 0x0B; int33(&r);
+            cx += (short) r.x.cx; cy += (short) r.x.dx;
+            cfx = clamp(cfx + (short) r.x.cx / fdiv, 0, width - 1);
+            cfy = clamp(cfy + (short) r.x.dx / fdiv, 0, height - 1);
+        }
         memset(&r, 0, sizeof r); r.x.ax = 3; int33(&r);
         gotoxy(1, 1); cprintf("POLL     x=%4d y=%4d b=%d          ", r.x.cx, r.x.dx, r.x.bx);
         gotoxy(1, 2); cprintf("HANDLER  x=%4d y=%4d b=%d events=%-6d", hx, hy, hb, events);
         gotoxy(1, 3); cprintf("FOLLOW   x=%4d y=%4d (1 px per %d mickeys)   ", fx, fy, fdiv);
-        gotoxy(1, 4); cprintf("COUNTERS x=%6d y=%6d          ", cx, cy);
+        gotoxy(1, 4);
+        if (counters)
+            cprintf("COUNTERS x=%6d y=%6d  cx=%4d cy=%4d  ", cx, cy, cfx, cfy);
+        else
+            cprintf("COUNTERS (not read; /C)                    ");
         gotoxy(1, 5); cprintf("PRESS    n=%-3d tick=%-8lu pit=%-5u       ", presses, press_tick, press_pit);
         gotoxy(1, 6); cprintf("KEY      n=%-3d last=%02x tick=%-8lu pit=%-5u", keys, lastkey & 0xFF, key_tick, key_pit);
         if (raw) {

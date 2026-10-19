@@ -22,7 +22,44 @@ through INT 33h, and programs pick different ones:
 `examples/touch/INPTEST.EXE` shows all of these at once, so you can see what a program would see
 before trying the program itself. Use `INPTEST /X:0,1278 /Y:0,479` to set a range, as Warcraft II
 does, `/F:n` for the pixels per mickey a mickey-following program uses, and `/T` to read the
-touchscreen directly.
+touchscreen directly. `/C` also reads the counters: off by default, because CuteMouse resets the
+handler's mickey counts whenever a program reads function 0Bh, so reading both upsets FOLLOW.
+
+## Putting the pointer somewhere: MOUSEBOX
+
+For DOS, load `examples/touch/MOUSEBOX.COM` after the mouse driver (about 2 KB resident). Then
+`mouse_to(x, y)` uses it: no corner parking, no looking for the pointer on screen. The server
+writes the target into MOUSEBOX's mailbox in guest memory, and MOUSEBOX moves the driver's
+pointer there and tells the program the same move in mickeys, in the handler's counts and in the
+motion counters. Each move goes as two: far up and left, so every pointer stops at the corner,
+then the target's distance from the corner. So it reaches programs whichever way they read the
+mouse, and however far their own pointer had drifted from the driver's. Buttons stay on the
+relative mouse: `mouse_to`, then `mouse(left=True)`. `mouse_state` shows MOUSEBOX's view: the
+range the program set, the screen in the driver's units, the driver's pointer, and which INT 33h
+functions the program calls.
+
+Tested with INPTEST, each time after relative moves to throw the pointers off. In every case the
+pointer landed on target, in every way of reading it (the driver's position is rounded to 8 units
+in text mode, as drivers do):
+
+- **The ranges:** the default range; Warcraft II's x 0..1278 with half a pixel per mickey; and
+  that narrowed to x 352..1278 afterwards. Narrowed, the driver's position stops at the range's
+  edge, as the program asked, while programs following mickeys still reach the target.
+- **The counters,** read alone (`/C`).
+- **The touchscreen** through `MOUSEBOX /T`, narrowed range included.
+- **Eight VMs at once:** each moved to a different spot with `together` (`"pointer": [x, y]`),
+  then clicked; two rounds.
+
+In Warcraft II, single clicks after `mouse_to` worked on menu buttons, and in a game on the left
+panel's Move button and on the minimap. The peasant walked where it was sent.
+
+The limits:
+- **Mickey ratios:** MOUSEBOX assumes the driver's default ratios (8 mickeys per 8 units across,
+  16 down). A program that changes them (function 0Fh, visible in `mouse_state`'s calls) would
+  see moves scaled.
+- **Its own scale:** a program that scales mickeys to pixels its own way, not matching the
+  driver's units, lands proportionally off. Check with a screenshot.
+- **Mouselook:** turning a view by counters isn't pointing; use relative `mouse`.
 
 ## What each kind of input reaches
 
@@ -30,12 +67,12 @@ touchscreen directly.
 |---|---|---|---|---|---|
 | `mouse(dx, dy)`, relative | yes | yes | yes | yes | serial or PS/2 mouse protocol |
 | `tablet(x, y)` with 3M's DOSTOUCH | yes | not tested | no: the program's pointer stays behind | not tested | |
-| `tablet(x, y)` with MTMOUSE | yes | yes | yes | **no** | |
+| `mouse_to(x, y)` with MOUSEBOX | yes | yes | yes | yes | |
+| `tablet(x, y)` with `MOUSEBOX /T` | yes | yes | yes | yes | |
 | `tablet(x, y)`, raw | | | | | MicroTouch Tablet-format reports on COM1 |
 
-So relative motion reaches every program. Touch reaches the ones that use the driver's position.
-With MTMOUSE, it also reaches programs that follow mickeys. Programs that read counters
-(function 0Bh) ignore touches: use relative motion for those.
+So relative motion reaches every program, and so do MOUSEBOX's moves and touches. Touch through
+DOSTOUCH reaches the programs that use the driver's position.
 
 ## Touchscreen (absolute) input
 
@@ -46,9 +83,9 @@ Three things must be in place, or nothing happens:
    `[Input devices]` in `86box.cfg` (86Box's 3M MicroTouch serial touchscreen, on COM1 by
    default). Without it, `tablet` fails with "no tablet configured". 86Box keeps running and
    nothing else changes; we tested that.
-2. **A driver must be loaded in the guest:** 3M's DOSTOUCH (TouchWare 3.4 for DOS), or MTMOUSE
-   from `examples/touch`, loaded after a mouse driver. One of them, not both: each reads the
-   touchscreen on COM1. MTMOUSE needs the mouse driver. DOSTOUCH works without one (it provides
+2. **A driver must be loaded in the guest:** 3M's DOSTOUCH (TouchWare 3.4 for DOS), or
+   `MOUSEBOX /T` from `examples/touch`, loaded after a mouse driver. One of them, not both: each
+   reads the touchscreen on COM1. MOUSEBOX needs the mouse driver. DOSTOUCH works without one (it provides
    INT 33h itself), but then the relative `mouse` no longer moves the pointer. Windows needs its own touch driver.
 3. **The guest must be past the point where the driver loads.** The BIOS setup, boot menus and
    anything before AUTOEXEC.BAT only see the relative mouse, so use `mouse` there.
@@ -100,27 +137,20 @@ Measured with `MEM /C`, all in conventional memory (none tried in upper memory):
 
 | Setup | Resident |
 |---|---|
-| CuteMouse 2.1 + MTMOUSE | 3.1 KB + 1.8 KB = 4.9 KB |
+| CuteMouse 2.1 + MTMOUSE (MOUSEBOX's predecessor) | 3.1 KB + 1.8 KB = 4.9 KB |
+| MOUSEBOX | about 2 KB (1.7 KB resident code and data, plus its PSP; not measured with MEM) |
 | Microsoft MOUSE.COM 8.20 + DOSTOUCH 3.5 | 17.3 KB + 14.9 KB = 32.2 KB |
 | DOSTOUCH 3.5 alone | 14.9 KB |
 
-For programs short of conventional memory, CuteMouse + MTMOUSE is much the smallest.
+For programs short of conventional memory, CuteMouse + MOUSEBOX is much the smallest.
 
-### MTMOUSE
+### MOUSEBOX /T
 
-MTMOUSE is ours (`examples/touch/mtmouse.s`, 2.3 KB). It reads the touchscreen on COM1 and drives
-the mouse driver already loaded:
-
-- It sets the driver's position with function 4.
-- It holds the left button while the finger is down, in functions 3, 5 and 6 and in event-handler
-  calls.
-- It sends the program's event handler the move in mickeys. Each touch goes as two moves: far up
-  and left, so both the driver's pointer and the program's own stop at the corner, then the
-  touch's distance from the corner. That keeps working when the two pointers have drifted apart.
-- The press arrives two timer ticks (about 110 ms) after the touch, once the program has seen the
-  pointer arrive.
-
-It doesn't feed function 0Bh's counters.
+With `/T`, MOUSEBOX also reads the touchscreen on COM1 and moves the pointer as above, holding the
+left button while the finger is down (in functions 3, 5 and 6 and in event-handler calls). The
+press arrives two timer ticks (about 110 ms) after the touch, once the program has seen the
+pointer arrive. Touches are scaled over the widest range the program set, which is the whole
+screen even after it narrows the range.
 
 ## Programs
 
@@ -140,7 +170,7 @@ It doesn't feed function 0Bh's counters.
   x 0..1278 and y 0..479 (functions 7 and 8): twice the width, so at the driver's default ratios
   (8 mickeys per 8 units across, 16 down) both axes move half a pixel per mickey. It also sets the
   driver's position itself (function 4), so the driver's pointer and the game's drift apart. With
-  DOSTOUCH, touches land at the old spot. MTMOUSE's corner-then-target moves fix that.
+  DOSTOUCH, touches land at the old spot. MOUSEBOX's corner-then-target moves fix that.
 - **`mouse_to` scrolls the map:** in a game, parking the pointer in a corner scrolls the map.
   Relative moves from a known spot are fine. The minimap re-centres the view, so slam to the
   corner, move onto the minimap and click: the pointer and view are then known.

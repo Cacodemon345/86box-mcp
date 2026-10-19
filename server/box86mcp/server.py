@@ -690,6 +690,7 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
       "text": "Alpha\n"                typed
       "tablet": [x, y] or [x, y, buttons]   a touch at that pixel (see tablet)
       "mouse": [dx, dy] or [dx, dy, buttons]   relative motion, with buttons
+      "pointer": [x, y]                  the pointer to that pixel, through MOUSEBOX (see mouse_to)
     In each round, every VM gets its next press at once (a key or character down, the finger down,
     the mouse moved and its buttons down); then the VMs run hold_ms together, everything is
     released, and they run gap_ms. Keys and text go one per round, so the k-th key reaches every VM
@@ -698,9 +699,9 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
     by_vm = {}
     for a in actions:
         name = a.get("vm")
-        kinds = [k for k in ("keys", "text", "tablet", "mouse") if k in a]
+        kinds = [k for k in ("keys", "text", "tablet", "mouse", "pointer") if k in a]
         if name is None or len(kinds) != 1:
-            raise ValueError(f"each action needs a vm and exactly one of keys, text, tablet, mouse: {a}")
+            raise ValueError(f"each action needs a vm and exactly one of keys, text, tablet, mouse, pointer: {a}")
         if name in by_vm:
             raise ValueError(f"two actions for {name}")
         kind = kinds[0]
@@ -711,6 +712,8 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
             for ch in a["text"]:
                 code, shifted = K.char_keys(ch)
                 seq.append(("keys", ([K.scancode("shift")] if shifted else []) + [code]))
+        elif kind == "pointer":
+            seq = [("pointer", [int(n) for n in a["pointer"][:2]])]
         else:
             v = list(a[kind]) + ([1] if kind == "tablet" else [0]) * (3 - len(a[kind]))
             seq = [(kind, [int(n) for n in v[:3]])]
@@ -728,6 +731,8 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
     states = [(n, st) for n, st in _group_states(groups.pop()) if st.held]
     _align(states)
     rounds = max(len(q) for q in by_vm.values())
+    if any(q[0][0] == "pointer" for q in by_vm.values()):
+        hold_ms = max(hold_ms, 120)               # MOUSEBOX takes moves on a timer tick (55 ms)
     for r in range(rounds):
         now = [(n, _vms[n].vm.auto, q[r]) for n, q in by_vm.items() if r < len(q)]
         for name, auto, (kind, arg) in now:            # press
@@ -735,6 +740,12 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
                 auto.keys(True, arg)
             elif kind == "tablet":
                 auto.call(f"tablet {arg[0]} {arg[1]} {arg[2]}")
+            elif kind == "pointer":
+                vmobj = _vms[name].vm
+                addr = _mousebox(vmobj)
+                if addr is None:
+                    raise ValueError(f"MOUSEBOX isn't loaded in {name}")
+                _mousebox_send(vmobj, addr, *_mousebox_units(vmobj, addr, arg[0], arg[1]))
             else:
                 auto.mouse(arg[0], arg[1], arg[2])
         _align(states)                                    # key events take a little time each
@@ -745,6 +756,8 @@ def together(actions: list[dict], hold_ms: int = 60, gap_ms: int = 60) -> str:
             elif kind == "tablet":
                 auto.call(f"tablet {arg[0]} {arg[1]} 0")
                 auto.call("tablet out")
+            elif kind == "pointer":
+                pass
             elif arg[2]:
                 auto.mouse(0, 0, 0)
         _align(states)
@@ -910,9 +923,80 @@ def mouse_drag(x1: int, y1: int, x2: int, y2: int, pointer_addr: int | None = No
     return f"dragged from ({x1},{y1}) to about ({x2},{y2}); gain {gx:.2f}x{gy:.2f} px/count"
 
 
+MOUSEBOX_SIG = b"MOUSEBOX"
+_MB_FIELDS = ("seq", "ack", "x", "y", "xmin", "xmax", "ymin", "ymax", "xfull", "yfull",
+              "dx", "dy", "buttons", "hmask")
+
+
+def _mousebox(v) -> int | None:
+    """Where MOUSEBOX's mailbox is in this VM (examples/touch), or None. Cached; checked on use."""
+    addr = getattr(v, "_mousebox_addr", None)
+    if addr is not None and v.auto.memr(addr - 3, 11) == b"\xe9" + v.auto.memr(addr - 2, 2) + MOUSEBOX_SIG:
+        return addr
+    data = b"".join(v.auto.memr(a, min(CHUNK, 0xA0000 - a)) for a in range(0, 0xA0000, CHUNK))
+    v._mousebox_addr = None
+    i = data.find(MOUSEBOX_SIG)
+    while i >= 0:
+        # The resident copy: a .COM's code starts at offset 100h of its segment with a near jump,
+        # and the signature follows it. The name also turns up in the environment, AUTOEXEC.BAT's
+        # buffers and messages, which must not be written to.
+        if i >= 3 and (i - 0x103) % 16 == 0 and data[i - 3] == 0xE9:
+            v._mousebox_addr = i
+            break
+        i = data.find(MOUSEBOX_SIG, i + 1)
+    return v._mousebox_addr
+
+
+def _mousebox_read(v, addr: int) -> dict:
+    import struct
+
+    raw = v.auto.memr(addr + 8, 40 + 128)
+    words = struct.unpack("<14H", raw[:28])
+    st = dict(zip(_MB_FIELDS, words))
+    for k in ("x", "y", "xmin", "xmax", "ymin", "ymax", "xfull", "yfull", "dx", "dy"):
+        st[k] = st[k] - 65536 if st[k] >= 32768 else st[k]
+    st["handler"] = struct.unpack("<I", raw[28:32])[0]
+    calls = struct.unpack("<64H", raw[32:160])
+    st["calls"] = {f"{n:02X}h": c for n, c in enumerate(calls) if c}
+    return st
+
+
+def _mousebox_units(v, addr: int, x: int, y: int) -> tuple[int, int]:
+    """Frame pixel -> the driver's units, over the widest range the program set (the screen)."""
+    st = _mousebox_read(v, addr)
+    status = v.auto.status()
+    w, h = status.get("w") or 640, status.get("h") or 480
+    return (int((x + 0.5) * (st["xfull"] + 1) / w), int((y + 0.5) * (st["yfull"] + 1) / h))
+
+
+def _mousebox_send(v, addr: int, ux: int, uy: int) -> int:
+    import struct
+
+    seq = (_mousebox_read(v, addr)["seq"] + 1) & 0xFFFF
+    v.auto.memw(addr + 12, struct.pack("<hh", ux, uy))
+    v.auto.memw(addr + 8, struct.pack("<H", seq))
+    return seq
+
+
+@tool()
+def mouse_state() -> dict:
+    """How the program in a DOS VM reads the mouse, from MOUSEBOX (examples/touch) if it is loaded:
+    the range it set (functions 7, 8), the widest range since its reset (the whole screen, in the
+    driver's units), the driver's pointer and buttons, whether it has an event handler, and which
+    INT 33h functions it has called how often. A program calling 0Ch (an event handler) may draw its
+    own pointer from mickeys; 0Bh means it reads motion counters (mouselook: use relative mouse)."""
+    v = vm()
+    addr = _mousebox(v)
+    if addr is None:
+        raise ValueError("MOUSEBOX isn't loaded in this VM (examples/touch/MOUSEBOX.COM, after a mouse driver)")
+    st = _mousebox_read(v, addr)
+    st["address"] = addr
+    return st
+
+
 @tool()
 def mouse_to(x: int, y: int, pointer_addr: int | None = None, hotspot: str = "top-left",
-             tolerance: int = 1, max_moves: int = 10) -> str:
+             tolerance: int = 1, max_moves: int = 10, use_mousebox: bool = True) -> str:
     """Put the pointer at (x, y), closing the loop on where it actually lands.
 
     Guest mouse drivers scale and accelerate relative motion, so this homes the pointer to the top-left
@@ -923,8 +1007,27 @@ def mouse_to(x: int, y: int, pointer_addr: int | None = None, hotspot: str = "to
       corner, so the rest of the screen must be still (menus, installers, desktops). x/y are native
       frame pixels (screenshot reports the native size). hotspot: "top-left" for arrow pointers,
       "center" for crosshairs. Targets within ~32 px of the top-left corner can't be measured this way.
+    With MOUSEBOX loaded in a DOS guest (examples/touch, after the mouse driver) and no pointer_addr,
+    neither: MOUSEBOX puts the pointer there directly, for every way programs read the mouse,
+    including ones that draw their own pointer from mickeys. x/y are frame pixels. Then click with
+    mouse(left=True). use_mousebox=False forces the screen method.
     """
     v = vm()
+    if pointer_addr is None and use_mousebox:
+        addr = _mousebox(v)
+        if addr is not None:
+            ux, uy = _mousebox_units(v, addr, x, y)
+            seq = _mousebox_send(v, addr, ux, uy)
+            for _ in range(20):
+                _advance(30)
+                if _mousebox_read(v, addr)["ack"] == seq:
+                    _advance(30)
+                    st = _mousebox_read(v, addr)
+                    return (f"at target via MOUSEBOX: ({x},{y}) is ({ux},{uy}) in the driver's units; the driver "
+                            f"has the pointer at ({st['dx']},{st['dy']}) (range x {st['xmin']}..{st['xmax']}, "
+                            f"y {st['ymin']}..{st['ymax']})")
+            raise AutomationError("MOUSEBOX didn't take the move within 600 ms of emulated time: is the guest "
+                                  "running DOS code (not halted in a debugger)?")
     corner = 32
 
     noise = None
