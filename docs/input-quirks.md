@@ -68,6 +68,12 @@ mapping that later touches go through, so a wrong calibration shifts every touch
 map each video mode differently (`CalibrateVideoMode` in DOSTOUCH.INI). If touches land off by a
 constant scale or offset, suspect one of these.
 
+A calibration done with touches short of the real corners also leaves **dead edges**: touches
+near the edge map past the end of the range and pin there. To tell that apart from a program
+limiting the mouse's range (functions 7 and 8): run `INPTEST` with no options, so the range is
+the full screen. Dead edges there are calibration; edges that are only dead inside one program
+are its range. `INPTEST /T` shows the controller's raw reading, before any driver.
+
 ### 3M's DOSTOUCH
 
 DOSTOUCH comes from TouchWare 3.4 (1997) for DOS, which was on 3M's driver CD ("3M Touchscreen
