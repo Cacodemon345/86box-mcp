@@ -77,6 +77,11 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
 
 ## Eight players
 
+![The ring attack](../../docs/images/warcraft2-8players.gif)
+
+How Warcraft II reads the mouse, and the traps in automating it, are in
+[docs/input-quirks.md](../../docs/input-quirks.md#warcraft-ii-dos-v150-2x).
+
 The same setup with eight VMs (p1 to p8, copies of one VM without `mac` and `uuid` lines) on
 `plots.pud`, with CuteMouse and MOUSEBOX (examples/touch) in AUTOEXEC.BAT so `mouse_to` puts the
 pointer anywhere. The video runs from power-on to the end of the fight.
