@@ -65,7 +65,7 @@ the cases above, and say why.
 
 ## Memory and state
 
-`read_memory`, `write_memory`, `wait_for_memory`, `registers` (also CR2-CR4, DR0-DR7, GDTR/IDTR/LDTR/TR and segment caches; `fpu_registers` for x87/MMX). To find a game's variable:
+`read_memory`, `write_memory`, `wait_for_memory`, `registers` (also CR2-CR4, DR0-DR7, GDTR/IDTR/LDTR/TR and segment caches; `fpu_registers` for x87/MMX). In protected mode, `descriptor_table("gdt"|"ldt"|"idt")` decodes the tables, `translate_address(offset, selector)` walks selector -> linear -> physical with the page-table entries, and `read_memory(addr, linear=True)` reads through paging; breakpoint addresses are linear. To find a game's variable:
 `snapshot_memory`, make it change (lose a life, score), `diff_memory("decreased")`, repeat until a
 few addresses are left. `find_memory(text=...)` finds strings, for example text a program is
 showing.

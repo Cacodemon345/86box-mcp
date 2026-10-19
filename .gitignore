@@ -5,6 +5,7 @@ __pycache__/
 /86box/
 examples/mcpdemo/dist/
 examples/mcpdemo/out/
+examples/protected-mode/out/
 
 # Local Claude Code settings (machine-specific paths)
 .claude/settings.local.json

@@ -19,6 +19,7 @@ from PIL import Image as PILImage
 
 from . import disk
 from . import keys as K
+from . import x86
 from .gdbrsp import BREAK_KINDS, Gdb, describe_stop
 from .protocol import AutomationError
 from .vm import VM, machine_of, prime_nvr, write_config
@@ -1363,11 +1364,21 @@ def _span(start: int, end: int | None) -> tuple[int, int]:
 
 
 @tool()
-def read_memory(addr: int, length: int = 256) -> str:
+def read_memory(addr: int, length: int = 256, linear: bool = False) -> str:
     """Hex dump of physical memory (real-mode seg:off -> seg*16+off). Up to 65536 bytes, within the
-    emulated RAM (vm_info reports mem_kb)."""
-    _check_range(addr, length)
-    data = vm().auto.memr(addr, length)
+    emulated RAM (vm_info reports mem_kb). linear=True reads at a linear address through the page
+    tables, as the CPU sees it with paging on (translate_address shows the walk)."""
+    if linear:
+        if not 0 <= length <= 65536:
+            raise ValueError("length is 0..65536")
+        v = vm()
+        try:
+            data = _linear_reader(v, _pm_regs(v))(addr, length)
+        except ValueError as e:
+            raise AutomationError(str(e))
+    else:
+        _check_range(addr, length)
+        data = vm().auto.memr(addr, length)
     lines = []
     for off in range(0, len(data), 16):
         chunk = data[off:off + 16]
@@ -1519,6 +1530,117 @@ def fpu_registers() -> dict:
     return vm().auto.fpu()
 
 
+# Protected mode: descriptor tables and page tables, read through the registers above ------------
+
+
+def _pm_regs(v: VM) -> dict:
+    r = v.auto.regs()
+    if "gdtr_base" not in r:
+        raise AutomationError("this 86Box doesn't report the descriptor-table and control registers; "
+                              "it needs 86Box/86Box#8416")
+    return r
+
+
+def _phys_reader(v: VM):
+    size = v.mem_bytes()
+
+    def read(addr: int, length: int) -> bytes:
+        if addr < 0 or addr + length > size:
+            raise ValueError(f"physical {addr:#x}+{length} is outside the emulated RAM (0..{size:#x})")
+        return v.auto.memr(addr, length)
+    return read
+
+
+def _linear_reader(v: VM, r: dict):
+    phys = _phys_reader(v)
+    return lambda addr, length: x86.read_linear(phys, r["cr0"], r.get("cr3", 0), r.get("cr4", 0), addr, length)
+
+
+@tool()
+def descriptor_table(table: str = "gdt", first: int = 0, count: int = 16) -> str:
+    """Decode entries of the GDT, LDT or IDT (table "gdt", "ldt" or "idt"), from the CPU's GDTR,
+    LDTR or IDTR: base, limit, type, DPL and flags for segments; selector:offset for gates.
+    first is the entry index (a selector >> 3, or an interrupt vector). In real mode the IDT is
+    the interrupt vector table (seg:off per vector). The tables are read at their linear
+    addresses, through the page tables when paging is on."""
+    v = vm()
+    r = _pm_regs(v)
+    table = table.lower()
+    if table not in ("gdt", "ldt", "idt"):
+        raise ValueError('table is "gdt", "ldt" or "idt"')
+    base, limit = r[f"{table}r_base"], r[f"{table}r_limit"]
+    real = not r["cr0"] & x86.CR0_PE
+    size = 4 if (table == "idt" and real) else 8
+    total = (limit + 1) // size
+    head = f"{table.upper()} base {base:#010x} limit {limit:#06x} ({total} entries), CPU {x86.mode(r)}"
+    if table == "ldt":
+        if real or not r.get("ldtr"):
+            return head + "\nno LDT loaded (LDTR is 0)"
+        head += f", LDTR {r['ldtr']:04x}"
+    if table == "gdt" and real:
+        head += " (real mode: the GDT isn't in use)"
+    read = _linear_reader(v, r)
+    lines = [head]
+    for i in range(max(first, 0), min(first + count, total)):
+        try:
+            raw = read(base + i * size, size)
+        except ValueError as e:
+            lines.append(f"{i:4x}  {e}")
+            break
+        if size == 4:
+            off, seg = int.from_bytes(raw[:2], "little"), int.from_bytes(raw[2:], "little")
+            lines.append(f"{i:4x}  {seg:04x}:{off:04x}")
+            continue
+        sel = f"sel {i * 8 | (4 if table == 'ldt' else 0):04x}  " if table != "idt" else "     "
+        lines.append(f"{i:4x}  {sel}{x86.decode_descriptor(raw)}")
+    if first >= total:
+        lines.append(f"(entry {first:#x} is past the limit)")
+    return "\n".join(lines)
+
+
+def _segment_base(v: VM, r: dict, selector: int | str) -> tuple[int, int | None, str]:
+    """Base, limit (None in real or V86 mode) and a description of a selector or segment register."""
+    if isinstance(selector, str):
+        name = selector.lower()
+        if name not in ("cs", "ds", "es", "ss", "fs", "gs"):
+            raise ValueError("a segment register is cs, ds, es, ss, fs or gs")
+        base = r["cs_base"] if name == "cs" else r[f"{name}_base"]
+        limit = r.get(f"{name}_limit")
+        return base, limit, f"{name} = {r[name]:04x}, cached base {base:#x} limit {limit:#x}"
+    mode = x86.mode(r)
+    if mode in ("real", "virtual-8086"):
+        return selector * 16, None, f"{mode} mode: {selector:04x} * 16"
+    table = "ldt" if selector & 4 else "gdt"
+    tbase, tlimit = r[f"{table}r_base"], r[f"{table}r_limit"]
+    if (selector & ~7) + 7 > tlimit:
+        raise ValueError(f"selector {selector:04x} is past the {table.upper()} limit {tlimit:#x}")
+    d = x86.decode_descriptor(_linear_reader(v, r)(tbase + (selector & ~7), 8))
+    if d.selector is not None:      # a TSS or LDT descriptor still has a base worth translating
+        raise ValueError(f"selector {selector:04x} is a {d.kind}, not a segment")
+    note = "" if d.present else "\nthe segment isn't present: loading it would fault (#NP, or #SS for SS)"
+    return d.base, d.limit, f"selector {selector:04x} ({table.upper()} entry {selector >> 3:#x}, RPL {selector & 3}): {d}{note}"
+
+
+@tool()
+def translate_address(address: int, selector: int | str | None = None) -> str:
+    """Translate an address as the CPU would: selector:offset -> linear -> physical. With selector
+    (a number, looked up in the GDT or LDT, or a segment register name such as "ds", using its
+    cached base), address is the offset; without, address is already linear. The page walk shows
+    each page directory and table entry. In real and V86 mode a selector is a paragraph number."""
+    v = vm()
+    r = _pm_regs(v)
+    lines = [f"CPU {x86.mode(r)}"]
+    linear = address
+    if selector is not None:
+        base, limit, desc = _segment_base(v, r, selector)
+        lines.append(desc)
+        if limit is not None and address > limit:
+            lines.append(f"offset {address:#x} is past the limit {limit:#x}: the CPU would fault")
+        linear = (base + address) & 0xFFFFFFFF
+    lines.append(str(x86.walk(_phys_reader(v), r["cr0"], r.get("cr3", 0), r.get("cr4", 0), linear)))
+    return "\n".join(lines)
+
+
 # Debugging, through 86Box's GDB stub ------------------------------------------------------------
 
 
@@ -1564,7 +1686,10 @@ def _single_step(v: VM, g: Gdb) -> str:
 def _where(v: VM, g: Gdb) -> str:
     r = v.auto.regs()
     lin = _linear_eip(g)
-    code = v.auto.memr(lin, 8).hex(" ") if lin < v.mem_bytes() else "?"
+    try:
+        code = _linear_reader(v, r)(lin, 8).hex(" ") if "cr3" in r else v.auto.memr(lin, 8).hex(" ")
+    except (ValueError, AutomationError):
+        code = "?"
     return f"{r['cs']:04x}:{r['eip']:08x} (linear {lin:#x}), bytes {code}"
 
 
