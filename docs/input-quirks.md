@@ -126,6 +126,9 @@ It doesn't feed function 0Bh's counters.
   can't reach the left panel (minimap, unit and command buttons): the pointer stops at x 176, the
   edge of the map view. The game sets the driver's range to the map view while playing, and moves
   its own pointer into the panel from mickeys alone. The relative `mouse` reaches the panel.
+  Reproduced in INPTEST under DOSTOUCH: with `/X:352,1278`, touches left of 176 px all read
+  x = 352, the range's edge, while touches inside it read the same as with the full range. So it
+  is the program's range, not calibration, which would shift or scale every touch.
 - **The pointer:** the game follows the handler's mickeys and draws its own pointer, at half a
   pixel per mickey on both axes. The screen is 640x480, but the game sets the driver's range to
   x 0..1278 and y 0..479 (functions 7 and 8): twice the width, so at the driver's default ratios
