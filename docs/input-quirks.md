@@ -104,8 +104,10 @@ It doesn't feed function 0Bh's counters.
 ### Warcraft II (DOS, v1.50 "2X")
 
 - **The pointer:** the game follows the handler's mickeys and draws its own pointer, at half a
-  pixel per mickey on both axes, in a range of x 0..1278 and y 0..479. It also sets the driver's
-  position itself (function 4), so the driver's pointer and the game's drift apart. With
+  pixel per mickey on both axes. The screen is 640x480, but the game sets the driver's range to
+  x 0..1278 and y 0..479 (functions 7 and 8): twice the width, so at the driver's default ratios
+  (8 mickeys per 8 units across, 16 down) both axes move half a pixel per mickey. It also sets the
+  driver's position itself (function 4), so the driver's pointer and the game's drift apart. With
   DOSTOUCH, touches land at the old spot. MTMOUSE's corner-then-target moves fix that.
 - **`mouse_to` scrolls the map:** in a game, parking the pointer in a corner scrolls the map.
   Relative moves from a known spot are fine. The minimap re-centres the view, so slam to the
