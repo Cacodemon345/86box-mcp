@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "MCP server for driving the 86Box PC emulator through its automation socket"
 license = "GPL-2.0-or-later"
 requires-python = ">=3.11"
-dependencies = ["mcp>=2.3", "pillow>=10", "pycdlib>=1.14", "numpy>=1.24"]
+dependencies = ["mcp>=2.3", "pillow>=10", "pycdlib>=1.14"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

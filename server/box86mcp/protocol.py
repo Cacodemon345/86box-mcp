@@ -198,24 +198,6 @@ class Automation:
         r.pop("ok", None)
         return r
 
-    def audio_level(self, ms: int) -> dict:
-        return self.call(f"audio level {int(ms)}")["streams"]
-
-    def audio_read(self, stream: str, ms: int) -> dict:
-        """{"rate", "frames", "end_ms", "pcm": bytes of 16-bit stereo}"""
-        import base64
-
-        r = self.call(f"audio read {stream} {int(ms)}")
-        r["pcm"] = base64.b64decode(r.pop("data"))
-        return r
-
-    def wait_sound(self, timeout_ms: int, db: float) -> dict:
-        return self.call(f"wait sound {int(timeout_ms)} {float(db):g}")
-
-    def wait_silence(self, timeout_ms: int, db: float, for_ms: int, quiet_since_ms: int | None = None) -> dict:
-        since = "" if quiet_since_ms is None else f" {int(quiet_since_ms)}"
-        return self.call(f"wait silence {int(timeout_ms)} {float(db):g} {int(for_ms)}{since}")
-
     def fpu(self) -> dict:
         r = self.call("fpu")
         r.pop("ok", None)
