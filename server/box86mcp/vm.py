@@ -231,8 +231,8 @@ def configure_serial_capture(vm_dir: str | os.PathLike, port: int = 1) -> Path |
     lines = _ini_set(lines, "Ports (COM & LPT)", f"serial{port}_device", "file")
     lines = _ini_set(lines, section, "path", str(log))
     # An input file makes the backend raise DSR/DCD; without them the BIOS (INT 14h) refuses to send
-    # and DOS reports "Write fault error writing device COM1". /dev/null supplies no input.
-    lines = _ini_set(lines, section, "input_path", "/dev/null")
+    # and DOS reports "Write fault error writing device COM1". The null device supplies no input.
+    lines = _ini_set(lines, section, "input_path", os.devnull)
     # Write each byte through to the file, so serial_read sees it while the VM runs.
     lines = _ini_set(lines, section, "flush", "1")
     cfg.write_text("\n".join(lines) + "\n")
@@ -337,7 +337,12 @@ class VM:
         if log:
             self.serial_logs[1] = log
             self.serial_offsets[1] = 0
-        args = [str(self.binary), "-P", str(self.vm_dir), "-N", "--automation", self.endpoint]
+        # 86Box rewrites its global settings file at every start: give it one of its own, so a run
+        # leaves the user's alone, with the confirmations off (86Box only reads them from there;
+        # headless, they'd be dialogs nobody sees).
+        global_cfg = self.run_dir / "86box_global.cfg"
+        global_cfg.write_text("[Emulator]\nconfirm_exit = 0\nconfirm_reset = 0\nconfirm_save = 0\n")
+        args = [str(self.binary), "-P", str(self.vm_dir), "-O", str(global_cfg), "-N", "--automation", self.endpoint]
         if self.roms:
             args += ["-R", str(self.roms)]
         if self.token_file:
@@ -363,6 +368,8 @@ class VM:
         # Through guard.py, which stops 86Box if this process dies without calling stop(): it holds
         # the read end of the stdin pipe, and only we hold the write end.
         guard = [sys.executable, str(Path(__file__).with_name("guard.py"))]
+        if window and os.name == "nt":
+            guard.append("--no-activate")   # show the window, but leave the focus where the user has it
         self._mem_bytes = None
         self.proc = subprocess.Popen(guard + args, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
                                      env=env, start_new_session=True,
@@ -483,6 +490,9 @@ class VM:
                 self.auto.call("quit")
             except (AutomationError, OSError):
                 pass
+            # Hang up before waiting: on Windows, 86Box's exit waits for its automation thread, which
+            # sits in recv() until the client goes (shutdown() doesn't wake it there).
+            self.auto.close()
             try:
                 self.proc.wait(timeout)
             except subprocess.TimeoutExpired:
@@ -525,12 +535,15 @@ class VM:
         """Press the power button and let the guest shut itself down, in real time. True once 86Box
         has exited (and stop() has tidied up); False if it's still running after timeout seconds,
         released, because the guest ignored the button or hasn't finished."""
-        self.auto.quit_soft()
-        try:
-            self.let_cpu_run()
-            self.auto.release()  # the press is latched; the guest sees it once the CPU runs
-        except (AutomationError, OSError):
-            pass  # no button: 86Box is already powering off
+        # Run in real time first, then press, then hang up: nothing may follow quit soft. Without a
+        # power button 86Box powers off at once, and on Windows its listener still reads (see stop),
+        # takes the next request and waits forever for a CPU that has stopped. Calls after a False
+        # return reconnect.
+        self.auto.check_quit_soft()
+        self.let_cpu_run()
+        self.auto.release()
+        self.auto.call("quit soft")
+        self.auto.close()
         if not self._wait_exit(timeout):
             return False
         self.stop()
@@ -657,7 +670,12 @@ class VM:
         return self.auto.call(f"cd load {drive} {self.visible(image)}")
 
     def load_floppy(self, img: str | os.PathLike, drive: int = 0) -> dict:
-        return self.auto.call(f"fdd load {drive} {img}")
+        """Insert a floppy image. 86Box answers ok even when it can't load one, so check it's in."""
+        reply = self.auto.call(f"fdd load {drive} {img}")
+        if not any(f["drive"] == drive for f in self.auto.info()["floppy"]):
+            raise AutomationError(f"86Box did not load the floppy image {img}; the log may say why:\n"
+                                  f"{self.log_tail(5)}")
+        return reply
 
 
 
@@ -705,13 +723,16 @@ class AttachedVM(VM):
         self.auto.close()
 
     def _wait_exit(self, timeout: float) -> bool:
-        # No process to wait for: 86Box has gone when the connection fails.
+        # No process to wait for: 86Box has gone when the connection fails. Hang up between polls,
+        # or 86Box can't exit on Windows (see VM.stop).
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 self.auto.status()
             except (AutomationError, OSError):
                 return True
+            finally:
+                self.auto.close()
             time.sleep(0.2)
         return False
 
