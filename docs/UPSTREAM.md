@@ -33,7 +33,7 @@ Merged on 2026-10-19:
 | [#8405](https://github.com/86Box/86Box/pull/8405) | `tablet x y buttons` / `tablet out`: absolute input for a configured tablet or touchscreen (the `tablet` tool) |
 | [#8416](https://github.com/86Box/86Box/pull/8416) | `regs` returns CR2, CR3, CR4, the debug registers, the descriptor caches, GDTR/IDTR/LDTR/TR, CPL, SMM and the TSC; a new `fpu` command returns the x87 and MMX registers (`registers`, `fpu_registers`, and the protected-mode tools built on them). There is no CR1 on x86 |
 
-`86BOX_COMMIT` names an upstream commit with all of them, the merge of #8402.
+`86BOX_COMMIT` names an upstream commit with all of them, the merge of #8416.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 

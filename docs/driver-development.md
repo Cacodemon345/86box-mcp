@@ -48,7 +48,7 @@ FIFO, changes just as if the driver had read it.
 1. Build 86Box with the stub as well as the automation socket:
    `docker/build.sh -D GDBSTUB=ON`, or add `-D GDBSTUB=ON` to your own
    CMake line.
-2. Use an 86Box from 2026-10-18 or later (`86BOX_COMMIT` or newer), with two
+2. Use an 86Box from 2026-10-19 or later (`86BOX_COMMIT` or newer), with two
    fixes. [86Box#8390](https://github.com/86Box/86Box/pull/8390) lets the stub and the
    automation socket share a machine: without it, GDB gets no answers while the
    machine is held, and the automation clock counts time while the stub has the
