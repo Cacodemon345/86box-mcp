@@ -65,6 +65,30 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
    The speed list plays the boot at 4x, the lobby at 2x and the game at real speed. Each VM's
    panel shows its own frames; the clock above them is the emulated time they share.
 
+## Over a null-modem cable
+
+![Alpha and Bravo connect over COM1, chat, and Bravo surrenders](../../docs/images/warcraft2-null-modem.gif)
+
+The same two VMs can play over a serial cable instead. `serial_link` joins p1's COM1 to p2's
+with a null-modem cable, wired with full handshaking (RTS to CTS, DTR to DSR and DCD), which
+Warcraft II needs. Both VMs are started with `vm_start(serial=[1])`, which puts COM1 on the
+automation socket. Then:
+
+```
+examples/warcraft2/null_modem.sh WORK GAME_CD.cue [video.mp4]
+```
+
+It boots both VMs, starts the game, and picks Direct Connect on COM 1 (the game fills in IRQ 4).
+Bravo answers and Alpha calls; they exchange a line in the lobby, Bravo clicks Ready, Alpha
+starts the game, and Bravo surrenders: Victory on one screen, Defeat on the other. With a video
+file, it records both from power-on and renders them side by side.
+
+Each byte crosses the cable after the lockstep quantum in which it was sent (10 ms) and reaches
+the other guest at the baud rate its UART is set to. Everything happens in emulated time, so two
+runs give the same bytes both ways (`serial_links` prints the counts: 1908 from Alpha, 1301 from
+Bravo here) and the same final screens. That needs fixed MACs (see step 1 above): the network
+cards stay in the VMs, the IPX driver still loads, and the game's setup changes with p2's MAC.
+
 ## What it took
 
 - **Stepping together.** A tool acting on one VM used to advance only that one. The other VM

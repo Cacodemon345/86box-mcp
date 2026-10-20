@@ -333,6 +333,29 @@ however the game reads the mouse. What the game taught us about input is in
 [docs/input-quirks.md](docs/input-quirks.md), and the run itself in
 [`examples/warcraft2`](examples/warcraft2#eight-players).
 
+#### Warcraft II over a null-modem cable
+
+![Two 86Box VMs playing Warcraft II over a serial link](docs/images/warcraft2-null-modem.gif)
+
+The same two machines, without the network: `serial_link` joins their COM1
+ports with a null-modem cable, and they play a Direct Connect game. Alpha
+calls, Bravo answers, they chat in the lobby, and Bravo surrenders. Each
+byte crosses the cable between lockstep quanta and reaches the other guest at
+its own baud rate, all in emulated time, so two runs give the same bytes both
+ways and the same final screens. See
+[`examples/warcraft2`](examples/warcraft2#over-a-null-modem-cable).
+
+#### Telix and a BBS through an emulated modem
+
+![Telix 3.51 dialing a BBS on the host](docs/images/telix-modem-bbs.gif)
+
+Telix 3.51 in DOS dials `555-1234` on COM1. `serial_attach` puts a Hayes modem
+there, which connects the call over TCP to a small BBS on the host
+([`examples/telix/fakebbs.py`](examples/telix)). The session logs in, echoes
+lines, captures 200 lines to a file, downloads a file by XMODEM-CRC and
+XMODEM-1K, uploads it back, and hangs up by dropping DTR. Every file came out
+byte for byte. See [`examples/telix`](examples/telix).
+
 ### Development and testing
 
 #### A demo game with readable memory state
@@ -438,7 +461,8 @@ These work with any guest OS:
 | `read_memory`, `write_memory`, `wait_for_memory`, `registers`, `fpu_registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`); CPU registers, including control, debug and descriptor-table registers and segment caches, and the x87/MMX registers (these need 86Box [#8416](https://github.com/86Box/86Box/pull/8416)) |
 | `descriptor_table`, `translate_address`, `read_memory(linear=True)` | Protected-mode debugging: decode the GDT, LDT or IDT; follow selector:offset to linear to physical through the page tables (32-bit, 4 MB pages, PAE); read memory as the CPU sees it with paging on ([examples/protected-mode](examples/protected-mode); needs 86Box [#8416](https://github.com/86Box/86Box/pull/8416)) |
 | `find_memory`, `snapshot_memory`, `diff_memory` | Search memory for bytes, text or a number; snapshot it, then keep only the addresses that changed the way you expect (increased, decreased, equal to a value) to find a game's variables |
-| `serial_read`, `wait_for_serial` | Guest output on COM1 |
+| `serial_read`, `wait_for_serial`, `serial_write` | A COM port both ways, in emulated time, for a VM started with `vm_start(serial=[1])` (any of COM1-4): what the guest sent, run until it sends some text, send it bytes (they arrive at the guest's baud rate). On an older 86Box, COM1 output only (`com1_log=True`) |
+| `serial_link`, `serial_attach`, `serial_status` | What's on the other end of the line: a null-modem cable to another VM (`serial_link`, for serial games and file transfer), or on the host a Hayes modem that dials TCP addresses, a TCP socket or a pty (`serial_attach`); bytes moved and line states |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |
 | `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time (1: every frame the guest shows), with sound; render a video with its sound on the same clock; hard reset or Ctrl+Alt+Del |
 | `sound_level`, `wait_for_sound`, `wait_for_silence`, `sound_spectrogram`, `sound_save`, `sound_check` | Needs an 86Box from 2026-10-20 or later (see limitations). Sound, for an agent that can't listen: how loud each stream is; run until a sound starts or stops (to about 1 ms); a spectrogram image with the dominant frequencies; a WAV for a person; a recording checked for dropouts and missing samples |
@@ -648,16 +672,18 @@ This is an early release, built for developing our own DOS games and tools.
   86Box threads, so they are dated by when each block arrives, within one
   block (20-100 ms). Nothing can be sent to the guest's line-in or microphone
   yet, and MIDI sent to a host MIDI device isn't captured.
-- **Serial and parallel ports: COM1 output only.** The guest's writes to COM1
-  can be read (`serial_read`, `wait_for_serial`); nothing can be sent to it, and
-  COM2-4 and the LPT ports (printers, parallel-port devices) aren't reachable
-  from the server at all. 86Box's own port options (a file, a host serial
-  port, a named pipe) still work if set in `86box.cfg`. Capturing COM1
-  (`vm_start(com1_log=True)`) is off by default. It used to look like it made
-  runs occasionally non-reproducible (about 2 in 6). Likelier causes have since
-  turned up: disk images that recorded the host's clock, and the guest's clock
-  following the host's (see repeatability, above). With the first fixed, 40 of
-  40 runs with COM1 capture on were identical.
+- **Serial ports need an 86Box from 2026-10-20 or later** (`86BOX_COMMIT` or
+  newer), with [#8439](https://github.com/86Box/86Box/pull/8439) (merged), for
+  input to the guest, COM2-4, links and modems. On an older 86Box, the guest's
+  writes to COM1 can still be read through a file (`vm_start(com1_log=True)`,
+  off by default). It used to look like that made runs occasionally
+  non-reproducible (about 2 in 6). Likelier causes have since turned up: disk
+  images that recorded the host's clock, and the guest's clock following the
+  host's (see repeatability, above). With the first fixed, 40 of 40 runs with
+  COM1 capture on were identical.
+- **The parallel ports aren't reachable** from the server (printers,
+  parallel-port devices). 86Box's own port options (a file, a host serial
+  port, a named pipe) still work if set in `86box.cfg`.
 
 ## License
 

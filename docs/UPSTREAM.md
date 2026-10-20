@@ -41,8 +41,15 @@ Merged on 2026-10-20, for sound and for recording a VM on another machine:
 | [#8420](https://github.com/86Box/86Box/pull/8420) | Sound capture on the emulated clock: `audio start`/`stop`, `audio level`, `audio read`, `audio pull` (over the connection, for a client on another machine), `wait sound`, `wait silence`, and per-frame cycle and sample stamps (`frames.jsonl`) for recordings |
 | [#8421](https://github.com/86Box/86Box/pull/8421) | Recorded frames over the connection (`record start` without a directory, `record pull`; zstd, XORed with the previous frame), so a client on another machine gets a recording's frames. Stacked on #8420 |
 
+Also merged on 2026-10-20, for serial ports and repeatable runs:
+
+| Pull request | What it adds |
+|---|---|
+| [#8439](https://github.com/86Box/86Box/pull/8439) | The `automation` serial backend (`serialN_device = automation`): `serial read`, `serial write`, `serial lines`, `wait serial`, and COM ports in `info` (`vm_start(serial=...)`, `serial_write`, `serial_link`, `serial_attach`). Input reaches the guest at its line rate |
+| [#8438](https://github.com/86Box/86Box/pull/8438) | `--automation-seed n`: 86Box's random numbers (generated MACs, 86F weak bits) from a fixed seed instead of the host's timestamp counter |
+
 `86BOX_COMMIT` names an upstream commit with all of them: master as of
-2026-10-20 (`a29194bdc`), after #8419, #8420 and #8421.
+2026-10-20 (`1de9fc333`), the merge of #8439.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 
