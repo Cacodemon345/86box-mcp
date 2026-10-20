@@ -37,6 +37,7 @@ Not proposed yet (no pull request opened):
 
 | Branch | What it adds |
 |---|---|
+| `automation-audio`, commit "pc_run: carry the remainder" | Blocks of emulated time average exactly 1 ms. Without it, for CPU clocks that aren't a multiple of 1 kHz (66 MHz: 66666 of 66666.67 cycles), the socket's clock runs 10 ppm fast against the emulated timers, and recorded frames drift from their sound by 1.2 ms in two minutes. To be its own pull request |
 | `automation-audio` | Sound capture on the emulated clock: `audio start`/`stop` (a WAV per sound stream, sample-exact for the polled streams), `audio level`, `audio read`, `wait sound`, `wait silence` (the sound tools, and sound in recordings) |
 
 `86BOX_COMMIT` names an upstream commit with all of them, the merge of #8416.
