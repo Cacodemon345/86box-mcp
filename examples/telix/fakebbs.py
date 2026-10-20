@@ -180,10 +180,18 @@ class Caller:
     def xmodem_receive(self) -> bytes | None:
         out = bytearray()
         expect = 1
-        start = bytes([ord("C")])
+        # The receiver drives XMODEM: send C every 3 s until the sender starts. Anything else that
+        # arrives meanwhile (the end of the menu line, say) is dropped, not taken for a reply.
+        self.buf.clear()
+        head = None
         for attempt in range(20):
-            self.conn.sendall(start)
-            head = self.byte(3.0)
+            self.conn.sendall(b"C")
+            end = time.time() + 3.0
+            while time.time() < end:
+                b = self.byte(max(0.05, end - time.time()))
+                if b in (SOH, STX, EOT, CAN):
+                    head = b
+                    break
             if head is not None:
                 break
         else:
