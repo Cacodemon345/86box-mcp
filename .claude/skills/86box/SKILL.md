@@ -65,7 +65,9 @@ the cases above, and say why.
   `wait_for_sound(threshold_db)` / `wait_for_silence(threshold_db, for_ms)` to run until a sound
   starts or ends; `sound_spectrogram(ms)` to see whether it's music, a tone or noise;
   `sound_save(path)` for the person to listen to. `record_start` records sound with the frames, and
-  `record_stop(video=...)` puts it in the video; `sound_check()` looks for dropouts. A sound card
+  `record_stop(video=...)` puts it in the video; `sound_check()` looks for dropouts. `sync=True` on
+  `record_stop`/`record_stop_all` overlays each frame's CPU cycles, sample position and
+  picture/sound hashes, to show VMs or picture and sound staying in step. A sound card
   holding a DC level after playback shows as a constant level (peak = RMS), not sound.
 - **DOS:** `dos_run("command")` types it and waits for the prompt. `dos_install_files` copies onto C:
   while the VM is stopped; `dos_put_floppy` or `cdrom_insert(files=[...])` while it runs.

@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 W, H, BAR, GAP, FPS = 640, 480, 28, 8, 20
+STRIP = 50          # sync=True: two lines of per-frame data under each picture
 
 
 def _frames(dirs) -> tuple[list[int], list[Path]]:
@@ -27,6 +28,51 @@ def _frames(dirs) -> tuple[list[int], list[Path]]:
     if not found:
         raise ValueError(f"no recorded frames in {', '.join(map(str, dirs))}")
     return [t for t, _ in found], [p for _, p in found]
+
+
+class _Stamps:
+    """frames.jsonl of one recording (86Box writes it with the frames): for each frame its CPU
+    cycles and sound sample position, and hashes of its pixels and of its sound since the frame
+    before (the raw main stream, which is sample-exact)."""
+
+    def __init__(self, d: Path):
+        import json
+
+        import numpy as np
+
+        from . import audio as A
+
+        self.by_ms: dict[int, dict] = {}
+        f = d / "frames.jsonl"
+        if f.exists():
+            for line in f.read_text().splitlines():
+                if line.strip():
+                    r = json.loads(line)
+                    self.by_ms[r["ms"]] = r
+        self.order = sorted(self.by_ms)
+        self.main = None
+        for seg in A.load(d):
+            if seg.stream == "main" and seg.exact:
+                import wave
+
+                with wave.open(str(seg.path)) as w:
+                    self.main = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).reshape(-1, 2)
+
+    def info(self, png: Path) -> dict | None:
+        import bisect
+        import hashlib
+
+        ms = int(png.stem)
+        r = self.by_ms.get(ms)
+        if r is None:
+            return None
+        out = dict(r, pix=hashlib.md5(png.read_bytes()).hexdigest()[:6], snd=None)
+        pos = r.get("audio", {}).get("main")
+        if self.main is not None and pos is not None:
+            i = bisect.bisect_left(self.order, ms)
+            prev = self.by_ms[self.order[i - 1]]["audio"].get("main", 0) if i else 0
+            out["snd"] = hashlib.md5(self.main[max(0, prev):max(0, pos)].tobytes()).hexdigest()[:6]
+        return out
 
 
 def frame_period(dirs) -> float:
@@ -94,13 +140,17 @@ def _audio_tracks(sources, audio: str | None, start: float, end: float):
 
 def render_grid(sources: list[tuple[str, list]], output: str | Path,
                 speed: list[tuple[float, float]] | None = None, frame_ms: float = 1000 / FPS,
-                audio: str | None = "first") -> str:
+                audio: str | None = "first", sync: bool = False) -> str:
     """Render [(label, [frame dirs]), ...] as one video (.mp4). Returns a summary.
 
     frame_ms: emulated ms per video frame at real speed: the spacing of the recorded frames (see
     frame_period) gives one video frame per recorded frame, as smooth as the guest's screen.
     audio: "first" (the first VM that recorded sound), "mix" (all), "split" (each VM panned to its
-    column: two VMs left and right), a VM's label, or "none"."""
+    column: two VMs left and right), a VM's label, or "none".
+    sync: show, under each picture, the frame's block (ms), CPU cycles since recording started, 86Box
+    frame number, sound sample position and hashes of its pixels and of its sound since the frame
+    before (from the frames.jsonl 86Box writes); with several VMs, the top bar compares each with the
+    first: cycle and sample differences, and whether pictures and sound are identical."""
     import tempfile
 
     import numpy as np
@@ -118,9 +168,12 @@ def render_grid(sources: list[tuple[str, list]], output: str | Path,
         raise ValueError("the recordings don't overlap in emulated time")
     cols = len(clips) if len(clips) <= 2 else 2 if len(clips) <= 4 else math.ceil(len(clips) / 2)
     rows = math.ceil(len(clips) / cols)
-    size = (cols * W + (cols - 1) * GAP, BAR + rows * (BAR + H) + (rows - 1) * GAP)
+    strip = STRIP if sync else 0
+    stamps = {Path(d): _Stamps(Path(d)) for _, dirs in sources for d in dirs} if sync else {}
+    size = (cols * W + (cols - 1) * GAP, BAR + rows * (BAR + H + strip) + (rows - 1) * GAP)
     size = (size[0] + size[0] % 2, size[1] + size[1] % 2)       # x264 wants even sizes
     font = ImageFont.load_default(size=18)
+    small = ImageFont.load_default(size=15)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     tracks = _audio_tracks(sources, audio, start, end)
@@ -137,11 +190,41 @@ def render_grid(sources: list[tuple[str, list]], output: str | Path,
         d = ImageDraw.Draw(canvas)
         clock = f"emulated t = {t / 1000:7.1f} s" + (f"  ({factor:g}x)" if factor != 1 else "")
         d.text((size[0] - 8, 4), clock, fill=(200, 200, 120), font=font, anchor="ra")
+        infos = []
         for i, (label, times, paths) in enumerate(clips):
             x = (i % cols) * (W + GAP)
-            y = BAR + (i // cols) * (BAR + H + GAP)
+            y = BAR + (i // cols) * (BAR + H + strip + GAP)
             d.text((x + 8, y + 4), label, fill="white", font=font)
-            canvas.paste(_panel(_nearest(times, paths, t)), (x, y + BAR))
+            png = _nearest(times, paths, t)
+            canvas.paste(_panel(png), (x, y + BAR))
+            if sync:
+                info = stamps[png.parent].info(png)
+                infos.append(info)
+                if info:
+                    smp = info.get("audio", {}).get("main")
+                    d.text((x + 8, y + BAR + H + 4),
+                           f"block {info['ms']} ms   cycles {info['cycles']:,}   frame #{info['frame']}",
+                           fill=(170, 220, 255), font=small)
+                    d.text((x + 8, y + BAR + H + 26),
+                           (f"sample {smp:,}   " if smp is not None else "") + f"picture {info['pix']}" +
+                           (f"   sound {info['snd']}" if info["snd"] else ""),
+                           fill=(170, 220, 255), font=small)
+                else:
+                    d.text((x + 8, y + BAR + H + 4), "(no frames.jsonl: 86Box without frame stamps)",
+                           fill=(160, 160, 160), font=small)
+        if sync and len(infos) > 1 and all(infos):
+            base = infos[0]
+            parts, same = [], True
+            for info in infos[1:]:
+                dc = info["cycles"] - base["cycles"]
+                ds = (info.get("audio", {}).get("main", 0) - base.get("audio", {}).get("main", 0))
+                pic, snd = info["pix"] == base["pix"], info["snd"] == base["snd"]
+                same = same and dc == 0 and ds == 0 and pic and snd
+                parts.append(f"d cycles {dc:+,}  d samples {ds:+,}  picture {'same' if pic else 'DIFFERENT'}"
+                             f"  sound {'same' if snd else 'DIFFERENT'}")
+            text = "vs first VM: " + (" | ".join(parts) if len(parts) <= 1 else
+                                     ("all identical" if same else " | ".join(parts)))
+            d.text((8, 4), text, fill=(120, 230, 120) if same else (255, 110, 110), font=small)
         ff.stdin.write(canvas.tobytes())
         if tracks:
             # This frame's stretch of emulated sound, at real speed only. Sample positions come from
@@ -182,12 +265,13 @@ def main() -> int:
     ap.add_argument("--speed", nargs="+", help="from_ms:factor ...")
     ap.add_argument("--frame-ms", type=float, help="emulated ms per video frame (default: the recorded spacing)")
     ap.add_argument("--audio", default="first", help="first, mix, split, a VM label, or none")
+    ap.add_argument("--sync", action="store_true", help="per-frame cycles, samples and hashes under each VM")
     a = ap.parse_args()
     for v in a.vm:
         if len(v) < 2:
             ap.error("--vm takes a label and at least one directory")
     frame_ms = a.frame_ms or min(frame_period(v[1:]) for v in a.vm)
-    print(render_grid([(v[0], v[1:]) for v in a.vm], a.out, parse_speed(a.speed), frame_ms, a.audio))
+    print(render_grid([(v[0], v[1:]) for v in a.vm], a.out, parse_speed(a.speed), frame_ms, a.audio, a.sync))
     return 0
 
 

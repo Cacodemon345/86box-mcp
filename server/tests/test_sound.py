@@ -103,6 +103,14 @@ def test_speaker_and_sound_blaster(tmp_path):
         assert abs(hz - 1000) < 5, (name, hz)
         assert not A.find_gaps(x, 0), name
 
+    # Each frame's stamps: CPU cycles always increase, and its sample position agrees with its
+    # cycle time (both count emulated time from the start of the recording).
+    stamps = [json.loads(line) for line in (rec / "frames.jsonl").read_text().splitlines()]
+    assert len(stamps) > 10
+    assert all(b["cycles"] > a["cycles"] for a, b in zip(stamps, stamps[1:]))
+    for st in stamps:
+        assert abs(st["audio"]["main"] - st["us"] * 48000 / 1e6) <= 2, st
+
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "json",
                             str(tmp_path / "rec.mp4")], capture_output=True, text=True, check=True)
     assert {s["codec_type"] for s in json.loads(probe.stdout)["streams"]} == {"video", "audio"}

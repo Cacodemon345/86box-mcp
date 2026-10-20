@@ -1247,14 +1247,15 @@ def _stop_audio(v: VM, d: Path) -> str:
 
 @tool()
 def record_stop(video: str | None = None, calls_log: str | None = None, fast_factor: int = 8,
-                speed: list[str] | None = None) -> str:
+                speed: list[str] | None = None, sync: bool = False) -> str:
     """Stop recording. With video (.mp4 or .gif), render it.
 
     With sound recorded (and no calls_log), the video plays on the emulated clock with its sound:
     real speed unless speed says otherwise ("from_ms:factor" list, as record_stop_all; sped-up
     stretches are silent), at the recording's frame rate. Otherwise real speed around interactions,
     idle stretches fast-forwarded fast_factor times; calls_log is an optional JSONL of
-    {"start_ms", "end_ms", "caption"} for captions (mcpctl writes one).
+    {"start_ms", "end_ms", "caption"} for captions (mcpctl writes one). sync=True shows each frame's
+    block, CPU cycles, sound sample position and hashes of its pixels and sound under the picture.
     """
     from . import audio as A
 
@@ -1270,7 +1271,7 @@ def record_stop(video: str | None = None, calls_log: str | None = None, fast_fac
             from .montage import frame_period, parse_speed, render_grid
 
             msg += "; " + render_grid([(_current, [frames])], out, parse_speed(speed),
-                                      frame_ms=frame_period([frames]), audio="first")
+                                      frame_ms=frame_period([frames]), audio="first", sync=sync)
         else:
             from .ctl import render_timeline
 
@@ -1282,7 +1283,7 @@ def record_stop(video: str | None = None, calls_log: str | None = None, fast_fac
 
 @tool()
 def record_stop_all(video: str | None = None, speed: list[str] | None = None, labels: dict[str, str] | None = None,
-                    group: str | None = None, audio: str = "first") -> str:
+                    group: str | None = None, audio: str = "first", sync: bool = False) -> str:
     """Stop recording on every VM of a group (default: the current VM's) and, with video (.mp4), render
     their recordings side by side on the shared emulated clock: two VMs next to each other, up to
     four 2x2, up to eight 4x2, each labelled, with the emulated time on top. Each VM's frames are all
@@ -1294,7 +1295,9 @@ def record_stop_all(video: str | None = None, speed: list[str] | None = None, la
     real speed throughout; the factor shows next to the clock). labels: {vm name: caption}.
     audio (when sound was recorded): "first" VM's sound, "mix" of all, "split" (each VM panned to
     its column, so two VMs play left and right: any misalignment is audible), a VM name, or "none".
-    Sound plays only in real-speed stretches.
+    Sound plays only in real-speed stretches. sync=True shows each frame's block, CPU cycles, sound
+    sample position and hashes of its pixels and sound under each picture, and compares every VM
+    with the first in the top bar: identical VMs show zero differences and matching hashes.
     """
     from .montage import frame_period, parse_speed, render_grid
 
@@ -1311,7 +1314,7 @@ def record_stop_all(video: str | None = None, speed: list[str] | None = None, la
         label_audio = (labels or {}).get(audio, audio)
         frame_ms = min(frame_period(st.record_dirs) for _, st in states)
         msg += "; " + render_grid(sources, Path(video).expanduser(), parse_speed(speed), frame_ms=frame_ms,
-                                  audio=label_audio)
+                                  audio=label_audio, sync=sync)
     return msg
 
 
