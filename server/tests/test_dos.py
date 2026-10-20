@@ -339,3 +339,43 @@ def test_control_debug_and_fpu_registers(dos_vm, tmp_path):
     assert f["ftw"] == 0x0FFF                         # physical registers 6 and 7 valid, the rest empty
     assert f["st0"] == "3fff8000000000000000"         # 1.0
     assert f["st1"].startswith("4000c90fdaa22168c")  # pi (exact with softfloat, as a double without)
+
+
+def test_time_sync_is_where_86box_reads_it(tmp_path):
+    from box86mcp.vm import _ini_get, _move_time_sync, write_config
+
+    write_config(tmp_path, 130, 16, 63)
+    lines = (tmp_path / "86box.cfg").read_text().splitlines()
+    assert _ini_get(lines, "Machine", "time_sync") == "disabled"
+    assert _ini_get(lines, "General", "time_sync") is None
+    # VMs made by older versions had it under [General], where 86Box ignores it.
+    old = ["[General]", "confirm_exit = 0", "time_sync = disabled", "", "[Machine]", "machine = 486sp3c"]
+    fixed = _move_time_sync(old)
+    assert _ini_get(fixed, "Machine", "time_sync") == "disabled" and _ini_get(fixed, "General", "time_sync") is None
+
+
+def test_vms_started_apart_boot_identically(tmp_path):
+    """The guest's clock starts from the CMOS, not the host's clock: two copies of a VM started
+    seconds apart are in the same state at the same emulated time."""
+    from box86mcp.vm import VM
+
+    from conftest import make_dos_vm
+
+    first = VM(make_dos_vm(tmp_path / "a"))
+    first.start(held=True)
+    time.sleep(2.5)
+    second = VM(make_dos_vm(tmp_path / "b"))
+    second.start(held=True)
+    try:
+        for v in (first, second):
+            v.auto.step(8000)
+
+        def state(v):
+            return v.auto.regs(), b"".join(v.auto.memr(o, 65536) for o in range(0, 0x100000, 65536))
+
+        (r1, m1), (r2, m2) = state(first), state(second)
+        assert r1 == r2
+        assert m1 == m2, f"RAM differs at {[hex(i) for i in range(len(m1)) if m1[i] != m2[i]][:8]}"
+    finally:
+        first.stop()
+        second.stop()

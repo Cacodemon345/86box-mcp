@@ -61,16 +61,17 @@ MTOOLS_DIR = os.path.expanduser(os.environ["BOX86_MTOOLS_DIR"]) if os.environ.ge
 PRIMED_NVR = Path(__file__).resolve().parent / "data" / "primed-nvr"
 
 
-# A 486DX2-66 VLB board close to typical period hardware; time_sync disabled so
-# runs are repeatable. Format with hdd_fn/cyls/heads/spt/speed.
+# A 486DX2-66 VLB board close to typical period hardware; time_sync disabled (86Box reads it from
+# [Machine]) so the clock starts from the saved CMOS, not the host's clock, and runs are repeatable.
+# Format with hdd_fn/cyls/heads/spt/speed.
 DX2_66_CFG = """[General]
 confirm_exit = 0
 confirm_reset = 0
 confirm_save = 0
 vid_renderer = qt_software
-time_sync = disabled
 
 [Machine]
+time_sync = disabled
 cpu_family = i486dx2
 cpu_multi = 2
 cpu_speed = 66666666
@@ -182,6 +183,24 @@ def _ini_set(lines: list[str], section: str, key: str, value: str) -> list[str]:
     while end > start + 1 and not lines[end - 1].strip():
         end -= 1
     return lines[:end] + [f"{key} = {value}"] + lines[end:]
+
+
+def _move_time_sync(lines: list[str]) -> list[str]:
+    """Older versions of this server wrote time_sync under [General], where 86Box ignores it (it
+    reads [Machine]), so those VMs' clocks followed the host's. Move it where it takes effect."""
+    misplaced = _ini_get(lines, "General", "time_sync")
+    if misplaced is None:
+        return lines
+    out, inside = [], False
+    for line in lines:
+        if line.startswith("["):
+            inside = line.strip() == "[General]"
+        elif inside and line.split("=", 1)[0].strip() == "time_sync":
+            continue
+        out.append(line)
+    if _ini_get(out, "Machine", "time_sync") is None:
+        out = _ini_set(out, "Machine", "time_sync", misplaced)
+    return out
 
 
 def _ini_get(lines: list[str], section: str, key: str) -> str | None:
@@ -307,7 +326,7 @@ class VM:
         # Without one, 86Box makes a new one and doesn't ask.
         cfg = self.vm_dir / "86box.cfg"
         lines = cfg.read_text().splitlines()
-        kept = [l for l in lines if l.split("=", 1)[0].strip() != "uuid"]
+        kept = _move_time_sync([l for l in lines if l.split("=", 1)[0].strip() != "uuid"])
         if kept != lines:
             _rewrite_cfg(cfg, kept)
         if debugger:
