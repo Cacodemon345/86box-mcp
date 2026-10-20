@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import contextlib
+import hashlib
 
 from .gdbrsp import Gdb, describe_stop
 from .guard import GRACE_S as GUARD_GRACE_S
@@ -106,6 +107,26 @@ bios = cl_gd5428_vlb
 """
 
 
+def copy_identity(lines: list[str], name: str) -> list[str]:
+    """A copied VM's 86box.cfg lines without the original's uuid, and with MACs of its own.
+
+    Each network card's MAC becomes one made from the old MAC and name (the new VM's folder name),
+    so copies named differently differ, and a copy made again under the same name gets the same
+    MAC. Removing the MAC instead makes 86Box draw a new one from the host's clock, and games that
+    read it (Warcraft II's setup does, through IPX) then play differently from run to run.
+    """
+    out = []
+    for l in lines:
+        key, _, value = l.partition("=")
+        if key.strip() == "uuid":
+            continue
+        if key.strip() == "mac":
+            h = hashlib.sha256(f"{value.strip()}/{name}".encode()).digest()
+            l = f"mac = {h[0]:02x}:{h[1]:02x}:{h[2]:02x}"
+        out.append(l)
+    return out
+
+
 def write_config(vm_dir: str | os.PathLike, cyls: int, heads: int, spt: int, hdd_fn: str = "hdd.img",
                  speed: str = "ramdisk", template: str | os.PathLike | None = None) -> Path:
     """Write the VM's 86box.cfg: the DX2-66 machine with one IDE disk, or a copy of template.
@@ -120,8 +141,8 @@ def write_config(vm_dir: str | os.PathLike, cyls: int, heads: int, spt: int, hdd
     lines = Path(template).expanduser().read_text().splitlines()
     # The template's identity must not come along: with a network card configured, 86Box sees a
     # known uuid in a new folder as a moved or copied machine and stops at a dialog asking which
-    # (invisible when headless). Without a uuid it just makes one, and new MACs come with it.
-    lines = [l for l in lines if l.split("=", 1)[0].strip() not in ("uuid", "mac")]
+    # (invisible when headless). Without a uuid it just makes one.
+    lines = copy_identity(lines, Path(vm_dir).name)
     old = _ini_get(lines, "Hard disks", "hdd_01_parameters")
     bus = old.split(",")[4].strip() if old and len(old.split(",")) >= 5 else "ide"
     lines = _ini_set(lines, "Hard disks", "hdd_01_fn", hdd_fn)

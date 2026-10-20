@@ -388,3 +388,21 @@ def test_vms_started_apart_boot_identically(tmp_path):
     finally:
         first.stop()
         second.stop()
+
+
+def test_copied_vm_gets_its_own_fixed_mac(tmp_path):
+    from box86mcp.vm import write_config
+
+    tpl = tmp_path / "tpl.cfg"
+    tpl.write_text("[General]\nuuid = 1234\n\n[Network]\nnet_01_card = novell_ne2k\n\n"
+                   "[Novell NE2000 #1]\nbase = 0300\nmac = b5:0a:bf\n")
+    macs = {}
+    for name in ("p1", "p2", "again/p1"):
+        d = tmp_path / name
+        d.mkdir(parents=True)
+        lines = write_config(d, 130, 16, 63, template=tpl).read_text().splitlines()
+        assert not any(l.startswith("uuid") for l in lines)
+        macs[name] = [l for l in lines if l.startswith("mac")]
+    assert len(macs["p1"]) == 1 and macs["p1"] != ["mac = b5:0a:bf"]
+    assert macs["p1"] != macs["p2"]          # copies differ from each other
+    assert macs["p1"] == macs["again/p1"]    # and the same copy made again matches

@@ -202,7 +202,8 @@ register at port 0x3CC (`0xef`).
   86Box treats a known uuid in a new folder as a moved or copied machine and
   stops at a dialog *before* starting the emulator thread. Headless, that's an
   invisible hang: the automation socket listens and connects but never answers.
-  `vm_create(config=...)` now drops `uuid` and `mac` lines from the template.
+  `vm_create(config=...)` now drops the template's `uuid` and gives each network card a MAC of
+  its own, made from the old MAC and the new folder's name.
 - **`cfdisk` writes with capital `W`.** Lowercase `w` does nothing, and the
   Enter after it selects Quit.
 - **V9x's `Ctrl+S`** didn't save in Notepad; closing with `Alt+F4` and answering

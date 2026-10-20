@@ -28,12 +28,15 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
    BOX86_DOS_BASE_IMG=... python examples/warcraft2/prepare.py --out WORK/p1 \
        --dos-files DOSFILES --net-kit NETKIT --mouse CTMOUSE.EXE --war2x WAR2X
    cp -r WORK/p1 WORK/p2
-   sed -i '/^mac *=/d;/^uuid *=/d' WORK/p2/86box.cfg
+   sed -i 's/^mac *=.*/mac = 00:00:02/;/^uuid *=/d' WORK/p2/86box.cfg
    ```
 
    Each VM gets an NE2000 at port 300, IRQ 3, on 86Box's local switch (`net_01_net_type =
    nlswitch`). Their shared `net_01_secret` puts them on one segment. A copied VM must not keep
-   the original's MAC address, hence the `sed`.
+   the original's MAC address, hence the `sed`. Give it a fixed one rather than deleting the
+   line: without a MAC, 86Box draws a new one from the host's clock at every start, and Warcraft
+   II's game setup depends on it (the races and start positions changed with it), so runs stop
+   being repeatable.
 
 2. **Get both players into the lobby.** Start `python -m box86mcp.ctl serve`, then run:
 
@@ -82,7 +85,7 @@ advances one advances both, 10 ms at a time, so neither game sees its peer stall
 How Warcraft II reads the mouse, and the traps in automating it, are in
 [docs/input-quirks.md](../../docs/input-quirks.md#warcraft-ii-dos-v150-2x).
 
-The same setup with eight VMs (p1 to p8, copies of one VM without `mac` and `uuid` lines) on
+The same setup with eight VMs (p1 to p8, copies of one VM, each with its own fixed `mac` and no `uuid`) on
 `plots.pud`, with CuteMouse and MOUSEBOX (examples/touch) in AUTOEXEC.BAT so `mouse_to` puts the
 pointer anywhere. The video runs from power-on to the end of the fight.
 
