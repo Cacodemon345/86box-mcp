@@ -638,7 +638,9 @@ This is an early release, built for developing our own DOS games and tools.
   videos, and no tool to capture, hear or check it. Sound is in progress on
   the `automation-audio` branches of this repo and of
   [dafugg/86Box](https://github.com/dafugg/86Box/tree/automation-audio); it
-  needs an 86Box change whose pull request isn't open yet.
+  needs 86Box pull requests [#8420](https://github.com/86Box/86Box/pull/8420)
+  (sound capture) and [#8419](https://github.com/86Box/86Box/pull/8419)
+  (blocks of emulated time average exactly 1 ms), both open.
 - **Serial and parallel ports: COM1 output only.** The guest's writes to COM1
   can be read (`serial_read`, `wait_for_serial`); nothing can be sent to it, and
   COM2-4 and the LPT ports (printers, parallel-port devices) aren't reachable

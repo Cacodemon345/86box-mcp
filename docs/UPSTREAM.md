@@ -33,6 +33,13 @@ Merged on 2026-10-19:
 | [#8405](https://github.com/86Box/86Box/pull/8405) | `tablet x y buttons` / `tablet out`: absolute input for a configured tablet or touchscreen (the `tablet` tool) |
 | [#8416](https://github.com/86Box/86Box/pull/8416) | `regs` returns CR2, CR3, CR4, the debug registers, the descriptor caches, GDTR/IDTR/LDTR/TR, CPL, SMM and the TSC; a new `fpu` command returns the x87 and MMX registers (`registers`, `fpu_registers`, and the protected-mode tools built on them). There is no CR1 on x86 |
 
+Open, for sound (used by the `automation-audio` branch):
+
+| Pull request | What it adds |
+|---|---|
+| [#8419](https://github.com/86Box/86Box/pull/8419) | `pc_run` blocks average exactly 1 ms of emulated time. Without it, for CPU clocks that aren't a multiple of 1 kHz, the socket's clock runs 10 ppm fast against the timers |
+| [#8420](https://github.com/86Box/86Box/pull/8420) | Sound capture on the emulated clock: `audio start`/`stop`, `audio level`, `audio read`, `wait sound`, `wait silence`, and per-frame cycle and sample stamps (`frames.jsonl`) for recordings |
+
 `86BOX_COMMIT` names an upstream commit with all of them, the merge of #8416.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
