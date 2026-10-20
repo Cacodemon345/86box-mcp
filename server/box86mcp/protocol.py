@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import time
 from dataclasses import dataclass
 
@@ -63,6 +64,14 @@ class Automation:
         # Called with (request, reply) when a timed command ends early because 86Box's GDB stub has
         # stopped the CPU; returns the reply to use.
         self.on_debugger_stop = None
+        # One request at a time, from any thread (a sound puller runs alongside the tools).
+        self._lock = threading.RLock()
+        # Called with each reply that carries the emulated time (not from inside itself), and the
+        # longest stretch of emulated time one step or wait may take: while sound is being pulled,
+        # longer ones are split so that no more than this passes between pulls.
+        self.after_reply = None
+        self.chunk_ms: int | None = None
+        self._in_hook = False
 
     @property
     def path(self) -> str:
@@ -105,6 +114,17 @@ class Automation:
             self.sock = None
 
     def call(self, line: str) -> dict:
+        with self._lock:
+            reply = self._call(line)
+            if self.after_reply and not self._in_hook and "ms" in reply:
+                self._in_hook = True
+                try:
+                    self.after_reply(reply)
+                finally:
+                    self._in_hook = False
+            return reply
+
+    def _call(self, line: str) -> dict:
         if "\n" in line:
             raise ValueError("request must be a single line")
         if not self.sock:
@@ -153,8 +173,21 @@ class Automation:
             raise AutomationError("this 86Box predates 'quit soft' (86Box#8382); it would power off hard")
         return self.call("quit soft")
 
+    def _chunked(self, timeout_ms: int, request, done=lambda r: bool(r.get("matched"))) -> dict:
+        """A timed command in pieces of at most chunk_ms (when set): request(ms) -> reply."""
+        timeout_ms = int(timeout_ms)
+        if not self.chunk_ms or timeout_ms <= self.chunk_ms:
+            return request(timeout_ms)
+        left = timeout_ms
+        while True:
+            q = min(left, self.chunk_ms)
+            r = request(q)
+            left -= q
+            if left <= 0 or done(r) or r.get("stopped"):
+                return r
+
     def step(self, ms: int) -> dict:
-        return self.call(f"step {int(ms)}")
+        return self._chunked(ms, lambda q: self.call(f"step {q}"), done=lambda r: False)
 
     def keys(self, down: bool, scancodes: list[int]) -> dict:
         if not scancodes:
@@ -210,11 +243,17 @@ class Automation:
         return r
 
     def wait_sound(self, timeout_ms: int, db: float) -> dict:
-        return self.call(f"wait sound {int(timeout_ms)} {float(db):g}")
+        return self._chunked(timeout_ms, lambda q: self.call(f"wait sound {q} {float(db):g}"))
 
     def wait_silence(self, timeout_ms: int, db: float, for_ms: int, quiet_since_ms: int | None = None) -> dict:
-        since = "" if quiet_since_ms is None else f" {int(quiet_since_ms)}"
-        return self.call(f"wait silence {int(timeout_ms)} {float(db):g} {int(for_ms)}{since}")
+        since = [quiet_since_ms]
+
+        def request(q):
+            arg = "" if since[0] is None else f" {int(since[0])}"
+            r = self.call(f"wait silence {q} {float(db):g} {int(for_ms)}{arg}")
+            since[0] = r.get("quiet_since_ms", since[0])
+            return r
+        return self._chunked(timeout_ms, request)
 
     def fpu(self) -> dict:
         r = self.call("fpu")
@@ -222,7 +261,7 @@ class Automation:
         return r
 
     def wait_text(self, text: str, timeout_ms: int) -> dict:
-        return self.call(f"wait text {int(timeout_ms)} {text}")
+        return self._chunked(timeout_ms, lambda q: self.call(f"wait text {q} {text}"))
 
     def wait_mem(self, addr: int, data: bytes, timeout_ms: int) -> dict:
-        return self.call(f"wait mem {int(timeout_ms)} 0x{addr:x} {data.hex()}")
+        return self._chunked(timeout_ms, lambda q: self.call(f"wait mem {q} 0x{addr:x} {data.hex()}"))

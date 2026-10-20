@@ -1,16 +1,19 @@
-"""Sound recorded by 86Box's automation socket: load it, put it on the emulated clock, check it.
+"""Sound recorded by 86Box's automation socket: fetch it, put it on the emulated clock, check it.
 
-`audio start <dir>` makes 86Box write one WAV per sound stream (main mix, music/OPL and PC speaker,
-CD, floppy, ...), each at its own rate. record_stop saves 86Box's description of them as sound.json:
-a segment's frame n is at start_ms + n * 1000 / rate of emulated time. The polled streams are
-sample-exact ("exact"); the threaded ones (CD, floppy, hard disk, MIDI synths) are as good as the
-moment each block arrived.
+86Box records every sound stream (main mix, music/OPL and PC speaker, CD, floppy, ...), each at its
+own rate, in memory (`audio start`), and the Puller fetches it over the automation connection
+(`audio pull`), so it works the same whether 86Box runs here or on another machine. It writes one
+WAV per stream and, at the end, sound.json: a segment's frame n is at start_ms + n * 1000 / rate of
+emulated time. The polled streams are sample-exact ("exact"); the threaded ones (CD, floppy, hard
+disk, MIDI synths) are as good as the moment each block arrived.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +33,7 @@ class Segment:
     start_ms: float
     exact: bool
     drift_frames: float | None = None
+    lost: int = 0               # frames that left 86Box's buffer before they were pulled
 
 
 def save_description(directory: Path, reply: dict) -> list[Segment]:
@@ -54,7 +58,7 @@ def load(directory: Path) -> list[Segment]:
         return []
     d = json.loads(f.read_text())
     return [Segment(s["name"], Path(directory) / s["file"], s["rate"], s["frames"], s["start_ms"], s["exact"],
-                    s.get("drift_frames")) for s in d["streams"]]
+                    s.get("drift_frames"), s.get("lost", 0)) for s in d["streams"]]
 
 
 def _peak(path: Path) -> int:
@@ -245,3 +249,114 @@ def dominant_hz(x: np.ndarray, rate: int = RATE, count: int = 3) -> list[tuple[f
         lo, hi = max(0, k - 20), k + 21
         f2[lo:hi] = 0                                   # skip the peak's neighbours
     return out
+
+
+STREAMS = ("main", "music", "wavetable", "cd", "fdd", "hdd", "ym2151", "midi")
+
+
+class _Wav:
+    """A WAV file written as samples arrive; the header is filled in at close."""
+
+    def __init__(self, path: Path, rate: int):
+        self.path, self.rate, self.frames = path, rate, 0
+        self.f = wave.open(str(path), "wb")
+        self.f.setnchannels(2)
+        self.f.setsampwidth(2)
+        self.f.setframerate(rate)
+
+    def write(self, pcm: bytes) -> None:
+        self.f.writeframesraw(pcm)
+        self.frames += len(pcm) // 4
+
+    def close(self) -> None:
+        self.f.close()
+
+
+class Puller:
+    """Record a VM's sound in 86Box's memory and fetch it into WAVs in `directory`, over the automation
+    connection. Pulls after any reply that moved emulated time on by a second or more (long steps and
+    waits are split into pieces of chunk_ms so it can), and every second of host time from a thread,
+    for a VM running in real time. 86Box keeps 30 s of each stream."""
+
+    def __init__(self, auto, directory: Path, chunk_ms: int = 5000):
+        import base64
+
+        self._b64 = base64.b64decode
+        self.auto, self.dir = auto, Path(directory)
+        self.files: dict[tuple[str, int], _Wav] = {}
+        self.next: dict[str, int] = {}
+        self.segment: dict[str, int] = {}
+        self.lost: dict[tuple[str, int], int] = {}
+        self._lock = threading.Lock()
+        self.start_ms = auto.call("audio start")["start_ms"]
+        self.last_ms = self.start_ms
+        self._done = threading.Event()
+        auto.chunk_ms = chunk_ms
+        auto.after_reply = self._after
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _after(self, reply: dict) -> None:
+        if reply.get("ms", 0) - self.last_ms >= 1000:
+            self.last_ms = reply["ms"]
+            self.pull()
+
+    def _run(self) -> None:
+        while not self._done.wait(1.0):
+            try:
+                self.pull()
+            except Exception:
+                pass                # the VM may be gone; finish() reports what was saved
+
+    def _file(self, stream: str, segment: int, rate: int) -> _Wav:
+        key = (stream, segment)
+        if key not in self.files:
+            name = f"{stream}.wav" if segment == 0 else f"{stream}-{segment + 1}.wav"
+            self.files[key] = _Wav(self.dir / name, rate)
+        return self.files[key]
+
+    def pull(self) -> None:
+        from .protocol import AutomationError
+
+        with self.auto._lock, self._lock:
+            for stream in STREAMS:
+                while True:
+                    try:
+                        r = self.auto.call(f"audio pull {stream} {self.next.get(stream, 0)}")
+                    except AutomationError:
+                        break           # nothing recorded from this stream (yet)
+                    if r["segment"] != self.segment.get(stream, r["segment"]):
+                        self.next[stream] = 0       # a new segment (the rate changed): from its start
+                        self.segment[stream] = r["segment"]
+                        continue
+                    self.segment[stream] = r["segment"]
+                    self.last_ms = max(self.last_ms, r["ms"])
+                    if r["lost"]:
+                        key = (stream, r["segment"])
+                        self.lost[key] = self.lost.get(key, 0) + r["lost"]
+                    if r["frames"]:
+                        self._file(stream, r["segment"], r["rate"]).write(self._b64(r["data"]))
+                    self.next[stream] = r["next"]
+                    if r["frames"] < (1 << 20):
+                        break
+
+    def finish(self) -> list[Segment]:
+        """Stop recording, fetch the rest, close the files and describe them (sound.json)."""
+        self._done.set()
+        self._thread.join(timeout=5)
+        self.auto.after_reply = None
+        self.auto.chunk_ms = None
+        reply = self.auto.call("audio stop")
+        self.pull()
+        for f in self.files.values():
+            f.close()
+        streams = []
+        for s in reply.get("streams", []):
+            f = self.files.get((s["name"], s.get("segment", 0)))
+            if f is None:
+                continue
+            s = dict(s, file=f.path.name, lost=self.lost.get((s["name"], s.get("segment", 0)), 0))
+            if f.frames != s["frames"]:
+                s["pulled_frames"] = f.frames
+            streams.append(s)
+        return save_description(self.dir, dict(reply, streams=streams))

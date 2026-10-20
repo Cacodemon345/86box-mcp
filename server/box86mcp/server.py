@@ -1208,7 +1208,8 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
     directory (one PNG per frame, named by emulated ms), whatever advances the clock. With audio
     (default), also every sound stream as WAVs on the same emulated clock, sample-exact for the
     sound cards, OPL and PC speaker (needs 86Box's audio capture, 86Box/86Box#8420; without it,
-    video only).
+    video only). The sound is fetched over the automation connection, so it is saved here even for
+    a VM attached on another machine (vm_attach); the frames are saved on 86Box's machine.
 
     Use record_stop to finish; it can render a video, one video frame per recorded frame. For video
     as smooth as the guest's screen, use interval_ms 1: every frame the guest displays (at 60-70 Hz,
@@ -1220,8 +1221,11 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
     r = v.auto.call(f"record start {int(interval_ms)} {d}")
     note = ""
     if audio:
+        from . import audio as A
+
         try:
-            v.auto.call(f"audio start {d}")
+            # Fetched over the automation connection, so it works for a VM on another machine too.
+            v.audio_puller = A.Puller(v.auto, d)
             note = " with sound"
         except AutomationError as e:
             note = f" (no sound: {e})"
@@ -1233,16 +1237,21 @@ def _stop_audio(v: VM, d: Path) -> str:
     """End a VM's sound recording into d; describe what was kept."""
     from . import audio as A
 
-    try:
-        r = v.auto.call("audio stop")
-    except AutomationError:
+    puller = getattr(v, "audio_puller", None)
+    if puller is None:
         return ""
-    segs = A.save_description(d, r)
+    v.audio_puller = None
+    try:
+        segs = puller.finish()
+    except AutomationError as e:
+        return f"; sound not saved: {e}"
     if not segs:
         return "; no sound"
     drift = [s.drift_frames for s in segs if s.drift_frames is not None]
     worst = f", worst drift {max(abs(x) for x in drift):.0f} frames" if drift else ""
-    return "; sound: " + ", ".join(f"{s.stream} {s.frames / s.rate:.1f} s" for s in segs) + worst
+    lost = sum(s.lost for s in segs)
+    return ("; sound: " + ", ".join(f"{s.stream} {s.frames / s.rate:.1f} s" for s in segs) + worst +
+            (f"; LOST {lost} samples (pulled too late)" if lost else ""))
 
 
 @tool()
@@ -1445,6 +1454,8 @@ def sound_check(directory: str | None = None) -> str:
                 " (continuous)" if A.drift_ok(s) else " (FRAMES MISSING)")
         elif not s.exact:
             line += " (block-timed stream)"
+        if s.lost:
+            line += f"; {s.lost} frames LOST before they could be fetched from 86Box"
         gaps = A.find_gaps(A.read(s), s.start_ms)
         line += f"; {len(gaps)} dropouts"
         lines.append(line)

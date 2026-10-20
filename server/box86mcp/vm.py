@@ -467,7 +467,17 @@ class VM:
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def _stop_puller(self) -> None:
+        """End a sound recording's pull thread (record_stop wasn't called)."""
+        puller = getattr(self, "audio_puller", None)
+        if puller is not None:
+            puller._done.set()
+            self.audio_puller = None
+            self.auto.after_reply = None
+            self.auto.chunk_ms = None
+
     def stop(self, timeout: float = 10.0) -> None:
+        self._stop_puller()
         if self.proc and self.proc.poll() is None:
             try:
                 self.auto.call("quit")
@@ -683,6 +693,7 @@ class AttachedVM(VM):
         return self.auto.sock is not None
 
     def stop(self, timeout: float = 10.0) -> None:
+        self._stop_puller()
         self.auto.close()
 
     def power_off(self) -> None:

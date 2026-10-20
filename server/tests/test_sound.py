@@ -150,3 +150,42 @@ def test_two_vms_in_lockstep_sound_the_same(tmp_path):
     x1, x2 = A.read(s1["main"]).mean(axis=1), A.read(s2["main"]).mean(axis=1)
     assert A.lag_ms(x1, x2) < 1000 / A.RATE
     assert "sound (split)" in out["stop"]
+
+
+def test_sound_reaches_a_client_attached_over_tcp(tmp_path, monkeypatch):
+    """The sound comes over the connection: 86Box records it in memory (no files), and an MCP server
+    attached over TCP, as from another machine, writes the WAVs itself."""
+    from box86mcp.vm import VM
+
+    monkeypatch.setenv("BOX86_TRANSPORT", "tcp")
+    vm = VM(dos_vm_with(tmp_path / "vm", "SBTONE.COM"))
+    vm.start(held=True)
+    rec = tmp_path / "here"
+    try:
+        assert vm.auto.wait_text("C:\\>", 60000)["matched"]
+        token = open(vm.token_file).read().strip()
+        vm.auto.close()                                    # one client at a time
+        env = dict(os.environ, XDG_CACHE_HOME=str(tmp_path / "cache"))
+
+        async def script(call):
+            out = {"attach": await call("vm_attach", endpoint=vm.endpoint, token=token)}
+            out["start"] = await call("record_start", directory=str(rec), interval_ms=50)
+            if "no sound" in out["start"]:
+                return out
+            await call("type_text", text="SBTONE\n")
+            await call("wait_for_sound", threshold_db=-30, timeout_ms=10000)
+            await call("wait_for_silence", threshold_db=-60, for_ms=300, timeout_ms=5000)
+            out["stop"] = await call("record_stop")
+            return out
+
+        out = run(env, script)
+        vm.auto.connect()
+    finally:
+        vm.stop()
+    if "no sound" in out["start"]:
+        pytest.skip("86Box without the automation audio capture")
+    segs = {s.stream: s for s in A.load(rec)}
+    assert "main" in segs and segs["main"].lost == 0, out["stop"]
+    x = A.read(segs["main"]).mean(axis=1)
+    std = x[:len(x) // 48 * 48].reshape(-1, 48).std(axis=1)
+    assert (std > 0.02).sum() > 400                       # the half-second tone, in 1 ms windows
