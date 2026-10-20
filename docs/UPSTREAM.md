@@ -38,7 +38,8 @@ Open, for sound (used by the `automation-audio` branch):
 | Pull request | What it adds |
 |---|---|
 | [#8419](https://github.com/86Box/86Box/pull/8419) | `pc_run` blocks average exactly 1 ms of emulated time. Without it, for CPU clocks that aren't a multiple of 1 kHz, the socket's clock runs 10 ppm fast against the timers |
-| [#8420](https://github.com/86Box/86Box/pull/8420) | Sound capture on the emulated clock: `audio start`/`stop`, `audio level`, `audio read`, `wait sound`, `wait silence`, and per-frame cycle and sample stamps (`frames.jsonl`) for recordings |
+| [#8420](https://github.com/86Box/86Box/pull/8420) | Sound capture on the emulated clock: `audio start`/`stop`, `audio level`, `audio read`, `audio pull` (over the connection, for a client on another machine), `wait sound`, `wait silence`, and per-frame cycle and sample stamps (`frames.jsonl`) for recordings |
+| [#8421](https://github.com/86Box/86Box/pull/8421) | Recorded frames over the connection (`record start` without a directory, `record pull`; zstd, XORed with the previous frame), so a client on another machine gets a recording's frames. Stacked on #8420 |
 
 `86BOX_COMMIT` names an upstream commit with all of them, the merge of #8416.
 The server checks for `ff` in `status` before sending `quit soft`, because an
