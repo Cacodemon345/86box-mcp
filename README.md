@@ -32,8 +32,25 @@ act(hold_keys=["up", "ctrl"], ms=200)   # run forward, firing, for exactly 0.2 s
 
 The agent thinks as long as it needs, and the game never moves without it.
 The same control makes runs repeatable: two cold boots driven by the same
-inputs produce byte-identical frames. Steps run as fast as the host allows
-(about 2× real time for a 486DX2-66 on an older Xeon).
+inputs produce byte-identical frames and sound, whenever they run. Steps run as
+fast as the host allows (about 2× real time for a 486DX2-66 on an older Xeon).
+
+What repeatability rests on:
+
+- **The guest's clock starts from the VM's saved CMOS**, not the host's clock
+  (`time_sync = disabled`, in the `[Machine]` section of `86box.cfg`). Before
+  2026-10-19 the server wrote it under `[General]`, where 86Box ignores it
+  without a warning, so each VM's clock followed the host's and two VMs
+  started seconds apart diverged within the first seconds of boot. `vm_start`
+  now moves a misplaced `time_sync` where 86Box reads it.
+- **Copies of a VM need the same CMOS file as well as the same disk.** 86Box
+  saves the CMOS, clock included, when a VM stops, so copy a VM after it has
+  stopped and its 86Box has exited.
+- **Several VMs in lockstep repeat too.** Two copies of a VM given the same
+  input at the same emulated times produced the same samples and the same
+  frames through the whole two-minute Warcraft II intro. Packets between VMs
+  are the exception: they travel in host time, so networked games repeat
+  closely rather than exactly.
 
 ## Quickstart
 
@@ -416,14 +433,15 @@ These work with any guest OS:
 | `mouse`, `mouse_to(x, y)`, `mouse_drag`, `mouse_state` | Relative motion, with buttons (`release=False` keeps them down); put the pointer at a screen position (closing the loop on where it lands, or directly through MOUSEBOX in DOS, [examples/touch](examples/touch)); drag; how a DOS program reads the mouse |
 | `tablet(x, y)` | Touch the screen at a pixel: absolute input, for a VM with 86Box's MicroTouch touchscreen and a touch driver in the guest ([examples/touch](examples/touch)) |
 | `together(actions)` | Input to several VMs at the same emulated instant, different for each if you like |
-| `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock |
+| `vm=` on any tool, `vm_list`, `vm_group`, `step_all`, `hold_all`, `release_all`, `record_stop_all` | Several VMs in one server, by name. Held VMs in a group (all of them, by default) step together in lockstep, whichever one a tool acts on, so networked guests stay in sync; `record_stop_all` renders their recordings side by side on the shared emulated clock, with one VM's sound, a mix, or each VM on its own side of the stereo image (`audio="split"`) |
 | `screenshot`, `screen_text`, `wait_for_text` | The frame; text-mode screen as text; run until text appears |
 | `read_memory`, `write_memory`, `wait_for_memory`, `registers`, `fpu_registers` | Physical memory, limited to the emulated RAM (`vm_info` reports `mem_kb`); CPU registers, including control, debug and descriptor-table registers and segment caches, and the x87/MMX registers (these need 86Box [#8416](https://github.com/86Box/86Box/pull/8416)) |
 | `descriptor_table`, `translate_address`, `read_memory(linear=True)` | Protected-mode debugging: decode the GDT, LDT or IDT; follow selector:offset to linear to physical through the page tables (32-bit, 4 MB pages, PAE); read memory as the CPU sees it with paging on ([examples/protected-mode](examples/protected-mode); needs 86Box [#8416](https://github.com/86Box/86Box/pull/8416)) |
 | `find_memory`, `snapshot_memory`, `diff_memory` | Search memory for bytes, text or a number; snapshot it, then keep only the addresses that changed the way you expect (increased, decreased, equal to a value) to find a game's variables |
 | `serial_read`, `wait_for_serial` | Guest output on COM1 |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |
-| `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time; hard reset or Ctrl+Alt+Del |
+| `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time (1: every frame the guest shows), with sound; render a video with its sound on the same clock; hard reset or Ctrl+Alt+Del |
+| `sound_level`, `wait_for_sound`, `wait_for_silence`, `sound_spectrogram`, `sound_save`, `sound_check` | Needs 86Box's audio capture, not in 86Box yet (see limitations). Sound, for an agent that can't listen: how loud each stream is; run until a sound starts or stops (to about 1 ms); a spectrogram image with the dominant frequencies; a WAV for a person; a recording checked for dropouts and missing samples |
 | `breakpoint_set`, `run_until_break`, `step_instructions`, `debug_continue` | With `vm_start(debugger=True)` and 86Box built with `-D GDBSTUB=ON`: execution breakpoints and memory watchpoints, single instructions, all while held |
 | `io_read`, `io_write`, `pci_scan`, `pci_config_read` | Also with the debugger: port I/O as the CPU would do it, and PCI configuration space |
 
@@ -616,17 +634,24 @@ This is an early release, built for developing our own DOS games and tools.
   them, the GDB stub can't answer while the machine is held, and memory
   watchpoints on RAM don't fire. See
   [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
-- **No sound, in any form.** The guest's sound card is emulated (games play
-  their music to 86Box), but nothing reaches you: no audio in recordings or
-  videos, and no tool to capture, hear or check it.
+- **Sound needs an 86Box with the audio capture, which isn't in 86Box yet:**
+  its pull request hasn't been opened. With it, recordings and videos carry
+  the guest's sound on the emulated clock, and the sound tools measure it;
+  without it, recordings are silent and the sound tools fail. The sound cards, OPL and the PC speaker are
+  sample-exact. CD audio, the floppy and hard-disk sounds and the MIDI synths
+  (MT-32, FluidSynth) are rendered on 86Box threads, so they are dated by when
+  each block arrives, within one block (20-100 ms). Nothing can be sent to the
+  guest's line-in or microphone yet, and MIDI sent to a host MIDI device isn't
+  captured.
 - **Serial and parallel ports: COM1 output only.** The guest's writes to COM1
   can be read (`serial_read`, `wait_for_serial`); nothing can be sent to it, and
   COM2-4 and the LPT ports (printers, parallel-port devices) aren't reachable
   from the server at all. 86Box's own port options (a file, a host serial
   port, a named pipe) still work if set in `86box.cfg`. Capturing COM1
   (`vm_start(com1_log=True)`) is off by default. It used to look like it made
-  runs occasionally non-reproducible (about 2 in 6). A likelier cause has since
-  turned up: disk images that recorded the host's clock. With that fixed, 40 of
+  runs occasionally non-reproducible (about 2 in 6). Likelier causes have since
+  turned up: disk images that recorded the host's clock, and the guest's clock
+  following the host's (see repeatability, above). With the first fixed, 40 of
   40 runs with COM1 capture on were identical.
 
 ## License

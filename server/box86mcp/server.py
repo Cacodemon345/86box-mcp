@@ -157,6 +157,37 @@ def _step(ms: int) -> dict:
     return vm().auto.step(ms)
 
 
+def _wait(native, timeout_ms: int, carry=None) -> dict:
+    """Run a native wait (native(timeout_ms) -> reply with "matched") on the selected VM. With other
+    held VMs in its group, they step with it a quantum at a time, concurrently; when the wait is
+    satisfied part way through a quantum, the selected VM is brought up to the others' time.
+    carry(reply) is called between quanta, for waits that continue from where the last left off."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    states = [(n, st) for n, st in _group_states(_group_of(_current)) if st.held]
+    if len(states) <= 1 or not any(n == _current for n, _ in states):
+        return native(timeout_ms)
+    me = vm()
+    others = [st for n, st in states if n != _current]
+    waited = 0
+    with ThreadPoolExecutor(len(states)) as pool:
+        while True:
+            q = max(1, min(_quantum_ms, timeout_ms - waited))
+            before = me.auto.status()["ms"]
+            jobs = [pool.submit(st.vm.auto.step, q) for st in others]
+            r = native(q)
+            for j in jobs:
+                j.result()
+            ran = r["ms"] - before
+            if ran < q:
+                me.auto.step(q - ran)
+            waited += q
+            if r.get("matched") or waited >= timeout_ms:
+                return r
+            if carry:
+                carry(r)
+
+
 def _snapshot(max_width: int) -> tuple[bytes, dict]:
     v = vm()
     info = v.auto.screenshot()
@@ -1135,7 +1166,8 @@ def act(hold_keys: list[str] | None = None, ms: int = 150, mouse_dx: int = 0, mo
 @tool()
 def wait_for_text(text: str, timeout_ms: int = 10000) -> str:
     """Run until text appears on one row of the text-mode screen, or timeout_ms of emulated time passes."""
-    r = vm().auto.wait_text(text, timeout_ms)
+    a = vm().auto
+    r = _wait(lambda t: a.wait_text(text, t), timeout_ms)
     return ("found" if r.get("matched") else "TIMED OUT") + f"; {_time_note(r)}"
 
 
@@ -1171,41 +1203,86 @@ def dos_run(command: str, timeout_ms: int = 30000, poll_ms: int = 100) -> str:
 
 
 @tool()
-def record_start(directory: str, interval_ms: int = 100) -> str:
+def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> str:
     """Record the screen: 86Box saves the displayed frame every interval_ms of emulated time into
-    directory (one PNG per frame, named by emulated ms), whatever advances the clock.
+    directory (one PNG per frame, named by emulated ms), whatever advances the clock. With audio
+    (default), also every sound stream as WAVs on the same emulated clock, sample-exact for the
+    sound cards, OPL and PC speaker (needs 86Box's audio capture, not in 86Box yet; without it,
+    video only).
 
-    Use record_stop to finish; it can render a video.
+    Use record_stop to finish; it can render a video, one video frame per recorded frame. For video
+    as smooth as the guest's screen, use interval_ms 1: every frame the guest displays (at 60-70 Hz,
+    about 4 MB of PNGs per second).
     """
     d = Path(directory).expanduser().resolve()
     d.mkdir(parents=True, exist_ok=True)
-    r = vm().auto.call(f"record start {int(interval_ms)} {d}")
+    v = vm()
+    r = v.auto.call(f"record start {int(interval_ms)} {d}")
+    note = ""
+    if audio:
+        try:
+            v.auto.call(f"audio start {d}")
+            note = " with sound"
+        except AutomationError as e:
+            note = f" (no sound: {e})"
     _record_dirs.append(d)
-    return f"recording every {interval_ms} ms of emulated time to {d}; {_time_note(r)}"
+    return f"recording every {interval_ms} ms of emulated time{note} to {d}; {_time_note(r)}"
+
+
+def _stop_audio(v: VM, d: Path) -> str:
+    """End a VM's sound recording into d; describe what was kept."""
+    from . import audio as A
+
+    try:
+        r = v.auto.call("audio stop")
+    except AutomationError:
+        return ""
+    segs = A.save_description(d, r)
+    if not segs:
+        return "; no sound"
+    drift = [s.drift_frames for s in segs if s.drift_frames is not None]
+    worst = f", worst drift {max(abs(x) for x in drift):.0f} frames" if drift else ""
+    return "; sound: " + ", ".join(f"{s.stream} {s.frames / s.rate:.1f} s" for s in segs) + worst
 
 
 @tool()
-def record_stop(video: str | None = None, calls_log: str | None = None, fast_factor: int = 8) -> str:
-    """Stop recording. With video (.mp4 or .gif), render it: real speed around interactions, idle
-    stretches fast-forwarded fast_factor times. calls_log is an optional JSONL of
+def record_stop(video: str | None = None, calls_log: str | None = None, fast_factor: int = 8,
+                speed: list[str] | None = None) -> str:
+    """Stop recording. With video (.mp4 or .gif), render it.
+
+    With sound recorded (and no calls_log), the video plays on the emulated clock with its sound:
+    real speed unless speed says otherwise ("from_ms:factor" list, as record_stop_all; sped-up
+    stretches are silent), at the recording's frame rate. Otherwise real speed around interactions,
+    idle stretches fast-forwarded fast_factor times; calls_log is an optional JSONL of
     {"start_ms", "end_ms", "caption"} for captions (mcpctl writes one).
     """
+    from . import audio as A
+
     v = vm()
     r = v.auto.call("record stop")
     msg = f"stopped recording; {r.get('frames')} frames"
+    if _record_dirs:
+        msg += _stop_audio(v, _last_record_dir())
     if video:
-        from .ctl import render_timeline
-
         frames = _last_record_dir()
-        render_timeline(frames, Path(video).expanduser(), Path(calls_log).expanduser() if calls_log else None,
-                        fast_factor=fast_factor)
-        msg += f"; rendered {video}"
+        out = Path(video).expanduser()
+        if A.load(frames) and not calls_log and out.suffix == ".mp4":
+            from .montage import frame_period, parse_speed, render_grid
+
+            msg += "; " + render_grid([(_current, [frames])], out, parse_speed(speed),
+                                      frame_ms=frame_period([frames]), audio="first")
+        else:
+            from .ctl import render_timeline
+
+            render_timeline(frames, out, Path(calls_log).expanduser() if calls_log else None,
+                            fast_factor=fast_factor)
+            msg += f"; rendered {video}"
     return msg
 
 
 @tool()
 def record_stop_all(video: str | None = None, speed: list[str] | None = None, labels: dict[str, str] | None = None,
-                    group: str | None = None) -> str:
+                    group: str | None = None, audio: str = "first") -> str:
     """Stop recording on every VM of a group (default: the current VM's) and, with video (.mp4), render
     their recordings side by side on the shared emulated clock: two VMs next to each other, up to
     four 2x2, up to eight 4x2, each labelled, with the emulated time on top. Each VM's frames are all
@@ -1215,18 +1292,164 @@ def record_stop_all(video: str | None = None, speed: list[str] | None = None, la
     speed: stretches of emulated time and how much faster than real time to play them, as
     "from_ms:factor", e.g. ["0:4", "75000:1"] plays boot at 4x and the rest at real speed (default
     real speed throughout; the factor shows next to the clock). labels: {vm name: caption}.
+    audio (when sound was recorded): "first" VM's sound, "mix" of all, "split" (each VM panned to
+    its column, so two VMs play left and right: any misalignment is audible), a VM name, or "none".
+    Sound plays only in real-speed stretches.
     """
-    from .montage import parse_speed, render_grid
+    from .montage import frame_period, parse_speed, render_grid
 
     states = [(n, st) for n, st in _states_or_fail(group) if st.record_dirs]
     if not states:
         raise ValueError("no VM in the group has recorded anything this session")
-    msg = "stopped recording: " + ", ".join(
-        f"{n} {st.vm.auto.call('record stop').get('frames')} frames" for n, st in states)
+    parts = []
+    for n, st in states:
+        frames = st.vm.auto.call("record stop").get("frames")
+        parts.append(f"{n} {frames} frames" + _stop_audio(st.vm, st.record_dirs[-1]))
+    msg = "stopped recording: " + ", ".join(parts)
     if video:
         sources = [((labels or {}).get(n, n), st.record_dirs) for n, st in states]
-        msg += "; " + render_grid(sources, Path(video).expanduser(), parse_speed(speed))
+        label_audio = (labels or {}).get(audio, audio)
+        frame_ms = min(frame_period(st.record_dirs) for _, st in states)
+        msg += "; " + render_grid(sources, Path(video).expanduser(), parse_speed(speed), frame_ms=frame_ms,
+                                  audio=label_audio)
     return msg
+
+
+# Sound -----------------------------------------------------------------------
+
+
+def _ring_mix(v: VM, ms: int, stream: str | None):
+    """The last ms of every stream (or one), mixed at 48 kHz, as numpy (frames, 2)."""
+    import numpy as np
+
+    from . import audio as A
+
+    levels = v.auto.audio_level(ms)
+    names = [stream] if stream else [n for n, l in levels.items() if l["peak_db"] > -120]
+    if stream and stream not in levels:
+        raise AutomationError(f"no sound from stream {stream!r} yet; streams: {', '.join(levels) or 'none'}")
+    n = A.RATE * ms // 1000
+    out = np.zeros((n, 2), np.float32)
+    end = max((levels[name]["last_ms"] for name in names), default=0)
+    for name in names:
+        r = v.auto.audio_read(name, ms)
+        x = np.frombuffer(r["pcm"], dtype=np.int16).reshape(-1, 2) / 32768.0
+        if r["rate"] != A.RATE:
+            idx = np.arange(round(len(x) * A.RATE / r["rate"])) * r["rate"] / A.RATE
+            x = np.stack([np.interp(idx, np.arange(len(x)), x[:, c]) for c in (0, 1)], axis=1)
+        x = x[-n:]
+        # Streams arrive in blocks: line them up by when each last block came.
+        shift = round((end - r["end_ms"]) * A.RATE / 1000)
+        lo = max(0, n - len(x) - shift)
+        hi = n - shift
+        if hi > lo:
+            out[lo:hi] += x[len(x) - (hi - lo):]
+    return np.clip(out, -1, 1), names, end
+
+
+@tool()
+def sound_level(ms: int = 200) -> str:
+    """How loud each sound stream was over the last ms of emulated time (up to 10 s): peak and RMS
+    in dBFS (0 = full scale, -120 = digital silence). Streams: main (sound cards' digital audio),
+    music (OPL FM and the PC speaker), wavetable, cd, fdd, hdd, ym2151, midi (synths). Sound comes
+    in blocks of about 20 ms (CD 100 ms), so the newest few ms may not be in yet."""
+    levels = vm().auto.audio_level(ms)
+    if not levels:
+        return "no sound streams yet"
+    return "\n".join(f"{name:9} peak {l['peak_db']:6.1f} dB  rms {l['rms_db']:6.1f} dB  ({l['rate']} Hz)"
+                     for name, l in levels.items())
+
+
+@tool()
+def wait_for_sound(threshold_db: float = -40.0, timeout_ms: int = 10000) -> str:
+    """Run until any sound stream reaches threshold_db (peak, dBFS), or timeout_ms of emulated time
+    passes. Reports which stream and the onset time (to about 1 ms; the run stops up to one 20 ms
+    block later). For example, wait for a game's music or a beep before taking a screenshot."""
+    a = vm().auto
+    r = _wait(lambda t: a.wait_sound(t, threshold_db), timeout_ms)
+    if r.get("matched"):
+        return f"sound on {r['stream']} from t={r['onset_ms']:.1f}ms; {_time_note(r)}"
+    return f"TIMED OUT: nothing reached {threshold_db} dB; {_time_note(r)}"
+
+
+@tool()
+def wait_for_silence(threshold_db: float = -60.0, for_ms: int = 500, timeout_ms: int = 10000) -> str:
+    """Run until every sound stream has stayed below threshold_db for for_ms of emulated time, or
+    timeout_ms passes. For example, wait for a sound effect or a track to finish."""
+    a = vm().auto
+    since = [a.status()["ms"]]
+
+    def carry(reply):
+        since[0] = reply.get("quiet_since_ms", since[0])
+
+    r = _wait(lambda t: a.wait_silence(t, threshold_db, for_ms, since[0]), timeout_ms, carry)
+    if r.get("matched"):
+        return f"quiet since t={r['quiet_since_ms']}ms; {_time_note(r)}"
+    return f"TIMED OUT: still sound above {threshold_db} dB; {_time_note(r)}"
+
+
+@tool()
+def sound_spectrogram(ms: int = 3000, stream: str | None = None) -> Image:
+    """A spectrogram of the last ms of emulated sound (up to 10 s), all streams mixed or one: time
+    left to right, frequency up to 8 kHz, brighter = louder. Shows at a glance whether there is
+    music, speech, a steady tone (a horizontal line) or noise, and where it starts and stops. The
+    dominant frequencies are in the title."""
+    from . import audio as A
+
+    x, names, end = _ring_mix(vm(), min(int(ms), 10000), stream)
+    top = A.dominant_hz(x)
+    title = (f"{', '.join(names) or 'silence'} until t={end}ms; " +
+             ", ".join(f"{hz:.0f} Hz" for hz, _ in top))
+    buf = io.BytesIO()
+    A.spectrogram(x, title=title).save(buf, format="PNG")
+    return Image(data=buf.getvalue(), format="png")
+
+
+@tool()
+def sound_save(path: str, ms: int = 5000, stream: str | None = None) -> str:
+    """Save the last ms of emulated sound (up to 10 s), mixed or one stream, as a 48 kHz WAV, for a
+    person to listen to (DC removed, as a real card's output capacitor does). Also reports the
+    dominant frequencies."""
+    from . import audio as A
+
+    x, names, end = _ring_mix(vm(), min(int(ms), 10000), stream)
+    out = Path(path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    x = A.fade_edges(A.dc_block(x))
+    A.write_wav(out, x)
+    peak = A.to_db(float(abs(x).max())) if len(x) else -120
+    top = ", ".join(f"{hz:.0f} Hz" for hz, _ in A.dominant_hz(x))
+    return f"saved {len(x) / A.RATE:.2f} s of {', '.join(names) or 'silence'} to {out} (peak {peak:.1f} dB; {top})"
+
+
+@tool()
+def sound_check(directory: str | None = None) -> str:
+    """Check a recording's sound (default: the last record_stop) for gaps: the recording itself
+    (each stream's sample count against the emulated time it covered) and what the guest played:
+    dropouts (silence inside sustained sound, as when a program fails to refill its sound buffer in
+    time)."""
+    from . import audio as A
+
+    d = Path(directory).expanduser() if directory else _last_record_dir()
+    segs = A.load(d)
+    if not segs:
+        return f"no sound recorded in {d}"
+    lines = []
+    for s in segs:
+        line = f"{s.stream}: {s.frames / s.rate:.2f} s at {s.rate} Hz from t={s.start_ms:.1f}ms"
+        if s.drift_frames is not None:
+            line += f", {s.drift_frames:+.0f} frames ({s.drift_frames * 1000 / s.rate:+.2f} ms) against the clock" + (
+                " (continuous)" if A.drift_ok(s) else " (FRAMES MISSING)")
+        elif not s.exact:
+            line += " (block-timed stream)"
+        gaps = A.find_gaps(A.read(s), s.start_ms)
+        line += f"; {len(gaps)} dropouts"
+        lines.append(line)
+        for g in gaps[:8]:
+            lines.append(f"  {g}")
+        if len(gaps) > 8:
+            lines.append(f"  ... {len(gaps) - 8} more")
+    return "\n".join(lines)
 
 
 _record_dirs: list[Path] = []
@@ -1401,7 +1624,8 @@ def wait_for_memory(addr: int, hex_bytes: str, timeout_ms: int = 10000) -> str:
     """Run until physical memory at addr equals hex_bytes, or timeout_ms of emulated time passes."""
     data = bytes.fromhex(hex_bytes)
     _check_range(addr, len(data))
-    r = vm().auto.wait_mem(addr, data, timeout_ms)
+    a = vm().auto
+    r = _wait(lambda t: a.wait_mem(addr, data, t), timeout_ms)
     return ("matched" if r.get("matched") else "TIMED OUT") + f"; {_time_note(r)}"
 
 

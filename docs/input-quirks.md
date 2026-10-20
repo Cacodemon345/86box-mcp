@@ -294,5 +294,7 @@ each if you like. Tested with INPTEST on eight VMs:
 
 - **Touch:** the same touch on all eight reached each handler within about 30 µs of emulated
   time, and a different touch on each landed on each VM's own spot.
-- **The BIOS clock** starts from the host's clock at boot. VMs booted a second apart differ by a
-  constant number of BIOS ticks, so compare each VM against its own clock.
+- **The BIOS clock** starts from each VM's saved CMOS. Copies of one VM start at the same time;
+  VMs with different CMOS files differ by a constant number of BIOS ticks, so compare each VM
+  against its own clock. (These tests ran before 2026-10-19, when the clock followed the host's:
+  then VMs booted a second apart differed by a second's worth of ticks.)
