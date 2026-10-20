@@ -153,8 +153,8 @@ def test_two_vms_in_lockstep_sound_the_same(tmp_path):
 
 
 def test_sound_reaches_a_client_attached_over_tcp(tmp_path, monkeypatch):
-    """The sound comes over the connection: 86Box records it in memory (no files), and an MCP server
-    attached over TCP, as from another machine, writes the WAVs itself."""
+    """The recording comes over the connection: 86Box keeps sound and frames in memory (no files), and
+    an MCP server attached over TCP, as from another machine, writes the WAVs and PNGs itself."""
     from box86mcp.vm import VM
 
     monkeypatch.setenv("BOX86_TRANSPORT", "tcp")
@@ -189,3 +189,6 @@ def test_sound_reaches_a_client_attached_over_tcp(tmp_path, monkeypatch):
     x = A.read(segs["main"]).mean(axis=1)
     std = x[:len(x) // 48 * 48].reshape(-1, 48).std(axis=1)
     assert (std > 0.02).sum() > 400                       # the half-second tone, in 1 ms windows
+    frames = sorted(rec.glob("*.png"))
+    stamps = (rec / "frames.jsonl").read_text().splitlines()
+    assert len(frames) > 20 and len(frames) == len(stamps), out["stop"]

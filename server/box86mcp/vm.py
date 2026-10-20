@@ -469,10 +469,10 @@ class VM:
 
     def _stop_puller(self) -> None:
         """End a sound recording's pull thread (record_stop wasn't called)."""
-        puller = getattr(self, "audio_puller", None)
+        puller = getattr(self, "puller", None)
         if puller is not None:
             puller._done.set()
-            self.audio_puller = None
+            self.puller = None
             self.auto.after_reply = None
             self.auto.chunk_ms = None
 

@@ -1218,15 +1218,23 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
     d = Path(directory).expanduser().resolve()
     d.mkdir(parents=True, exist_ok=True)
     v = vm()
-    r = v.auto.call(f"record start {int(interval_ms)} {d}")
-    note = ""
-    if audio:
-        from . import audio as A
+    from . import audio as A
 
+    # Frames and sound are kept in 86Box's memory and fetched over the automation connection, so a
+    # VM on another machine (vm_attach) records here too. An 86Box without that writes the frames
+    # itself, on its own machine.
+    try:
+        r = v.auto.call(f"record start {int(interval_ms)}")
+        pulled = True
+    except AutomationError:
+        r = v.auto.call(f"record start {int(interval_ms)} {d}")
+        pulled = False
+    note = ""
+    if audio or pulled:
         try:
-            # Fetched over the automation connection, so it works for a VM on another machine too.
-            v.audio_puller = A.Puller(v.auto, d)
-            note = " with sound"
+            v.puller = A.Puller(v.auto, d, audio=audio, frames=pulled)
+            if audio:
+                note = " with sound" if v.puller.audio else " (no sound: this 86Box has no audio capture)"
         except AutomationError as e:
             note = f" (no sound: {e})"
     _record_dirs.append(d)
@@ -1234,24 +1242,30 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
 
 
 def _stop_audio(v: VM, d: Path) -> str:
-    """End a VM's sound recording into d; describe what was kept."""
+    """Fetch the rest of a VM's recording (frames and sound) into d, after record stop; describe it."""
     from . import audio as A
 
-    puller = getattr(v, "audio_puller", None)
+    puller = getattr(v, "puller", None)
     if puller is None:
         return ""
-    v.audio_puller = None
+    v.puller = None
     try:
         segs = puller.finish()
     except AutomationError as e:
         return f"; sound not saved: {e}"
+    if puller.frames:
+        lost_frames = (f", {puller.frames_lost} frames LOST (fetched too late)" if puller.frames_lost else "")
+        if not puller.audio:
+            return f"; {puller.frames_saved} frames fetched{lost_frames}"
+    else:
+        lost_frames = ""
     if not segs:
-        return "; no sound"
+        return "; no sound" + lost_frames
     drift = [s.drift_frames for s in segs if s.drift_frames is not None]
     worst = f", worst drift {max(abs(x) for x in drift):.0f} frames" if drift else ""
     lost = sum(s.lost for s in segs)
     return ("; sound: " + ", ".join(f"{s.stream} {s.frames / s.rate:.1f} s" for s in segs) + worst +
-            (f"; LOST {lost} samples (pulled too late)" if lost else ""))
+            (f"; LOST {lost} samples (pulled too late)" if lost else "") + lost_frames)
 
 
 @tool()

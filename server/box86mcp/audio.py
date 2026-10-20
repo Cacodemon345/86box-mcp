@@ -273,22 +273,44 @@ class _Wav:
 
 
 class Puller:
-    """Record a VM's sound in 86Box's memory and fetch it into WAVs in `directory`, over the automation
-    connection. Pulls after any reply that moved emulated time on by a second or more (long steps and
-    waits are split into pieces of chunk_ms so it can), and every second of host time from a thread,
-    for a VM running in real time. 86Box keeps 30 s of each stream."""
+    """Fetch a VM's recording over the automation connection into `directory`: its sound (86Box
+    records it in memory: audio start, audio pull) as WAVs, and its frames (record start without a
+    directory, record pull) as PNGs with frames.jsonl. So it works the same whether 86Box runs here or
+    on another machine. Pulls after any reply that moved emulated time on by a second or more (long
+    steps and waits are split into pieces of chunk_ms so it can), and every second of host time from a
+    thread, for a VM running in real time. 86Box keeps 30 s of each sound stream and up to 256 MB of
+    frames."""
 
-    def __init__(self, auto, directory: Path, chunk_ms: int = 5000):
+    def __init__(self, auto, directory: Path, chunk_ms: int = 5000, audio: bool = True, frames: bool = False):
         import base64
+
+        from .protocol import AutomationError
 
         self._b64 = base64.b64decode
         self.auto, self.dir = auto, Path(directory)
+        self.frames = frames
+        self.frames_saved = 0
+        self.frames_lost = 0
+        self._prev = None
+        if frames:
+            import zstandard
+
+            self._unzstd = zstandard.ZstdDecompressor()
+            self._log = open(self.dir / "frames.jsonl", "w")
         self.files: dict[tuple[str, int], _Wav] = {}
         self.next: dict[str, int] = {}
         self.segment: dict[str, int] = {}
         self.lost: dict[tuple[str, int], int] = {}
         self._lock = threading.Lock()
-        self.start_ms = auto.call("audio start")["start_ms"]
+        self.audio = audio
+        self.start_ms = auto.call("status")["ms"]
+        if audio:
+            try:
+                self.start_ms = auto.call("audio start")["start_ms"]
+            except AutomationError:
+                self.audio = False
+        if not (self.audio or self.frames):
+            raise AutomationError("this 86Box records neither sound nor frames in memory")
         self.last_ms = self.start_ms
         self._done = threading.Event()
         auto.chunk_ms = chunk_ms
@@ -319,7 +341,9 @@ class Puller:
         from .protocol import AutomationError
 
         with self.auto._lock, self._lock:
-            for stream in STREAMS:
+            if self.frames:
+                self._pull_frames()
+            for stream in (STREAMS if self.audio else ()):
                 while True:
                     try:
                         r = self.auto.call(f"audio pull {stream} {self.next.get(stream, 0)}")
@@ -340,14 +364,39 @@ class Puller:
                     if r["frames"] < (1 << 20):
                         break
 
+    def _pull_frames(self) -> None:
+        """Frames waiting in 86Box: rebuild each (key, or XOR with the one before) and save it."""
+        import numpy as np
+        from PIL import Image
+
+        while True:
+            r = self.auto.call("record pull 64")
+            self.frames_lost = r.get("lost", 0)
+            for f in r["frames"]:
+                a = np.frombuffer(self._unzstd.decompress(self._b64(f["zstd"])), np.uint8)
+                if not f["key"]:
+                    a = a ^ self._prev
+                self._prev = a
+                Image.fromarray(a.reshape(f["h"], f["w"], 3), "RGB").save(
+                    self.dir / f"{f['ms']:010d}.png", compress_level=1)
+                stamp = {k: v for k, v in f.items() if k not in ("w", "h", "key", "zstd")}
+                self._log.write(json.dumps(stamp, separators=(",", ":")) + "\n")
+                self.frames_saved += 1
+                self.last_ms = max(self.last_ms, f["ms"])
+            if not r.get("pending"):
+                return
+
     def finish(self) -> list[Segment]:
-        """Stop recording, fetch the rest, close the files and describe them (sound.json)."""
+        """Stop the sound recording (the caller stops the frames first), fetch the rest, close the
+        files and describe the sound (sound.json)."""
         self._done.set()
         self._thread.join(timeout=5)
         self.auto.after_reply = None
         self.auto.chunk_ms = None
-        reply = self.auto.call("audio stop")
+        reply = self.auto.call("audio stop") if self.audio else {"streams": []}
         self.pull()
+        if self.frames:
+            self._log.close()
         for f in self.files.values():
             f.close()
         streams = []
