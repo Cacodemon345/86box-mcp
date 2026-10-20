@@ -441,7 +441,7 @@ These work with any guest OS:
 | `serial_read`, `wait_for_serial` | Guest output on COM1 |
 | `floppy_insert`, `floppy_eject`, `cdrom_insert`, `cdrom_eject` | Swap media while running; `cdrom_insert` can build an ISO from host files |
 | `record_start`, `record_stop`, `reset` | Record a frame every N ms of emulated time (1: every frame the guest shows), with sound; render a video with its sound on the same clock; hard reset or Ctrl+Alt+Del |
-| `sound_level`, `wait_for_sound`, `wait_for_silence`, `sound_spectrogram`, `sound_save`, `sound_check` | Needs 86Box's audio capture, not in 86Box yet (86Box #8420; see limitations). Sound, for an agent that can't listen: how loud each stream is; run until a sound starts or stops (to about 1 ms); a spectrogram image with the dominant frequencies; a WAV for a person; a recording checked for dropouts and missing samples |
+| `sound_level`, `wait_for_sound`, `wait_for_silence`, `sound_spectrogram`, `sound_save`, `sound_check` | Needs an 86Box from 2026-10-20 or later (see limitations). Sound, for an agent that can't listen: how loud each stream is; run until a sound starts or stops (to about 1 ms); a spectrogram image with the dominant frequencies; a WAV for a person; a recording checked for dropouts and missing samples |
 | `breakpoint_set`, `run_until_break`, `step_instructions`, `debug_continue` | With `vm_start(debugger=True)` and 86Box built with `-D GDBSTUB=ON`: execution breakpoints and memory watchpoints, single instructions, all while held |
 | `io_read`, `io_write`, `pci_scan`, `pci_config_read` | Also with the debugger: port I/O as the CPU would do it, and PCI configuration space |
 
@@ -634,15 +634,15 @@ This is an early release, built for developing our own DOS games and tools.
   them, the GDB stub can't answer while the machine is held, and memory
   watchpoints on RAM don't fire. See
   [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
-- **Sound needs 86Box pull requests that aren't merged yet:**
-  [#8420](https://github.com/86Box/86Box/pull/8420) (sound capture) and
-  [#8419](https://github.com/86Box/86Box/pull/8419) (blocks of emulated time
-  average exactly 1 ms); the `automation-audio` branch of
-  [dafugg/86Box](https://github.com/dafugg/86Box/tree/automation-audio) has
-  both. With them, recordings and videos carry the guest's sound on the
-  emulated clock, and the sound tools measure it; without #8420, recordings
-  are silent and the sound tools fail, and without #8419 the socket's clock
-  runs 10 ppm fast against the sound (1.2 ms in two minutes at 66 MHz). The
+- **Sound, and recordings of a VM on another machine, need an 86Box from
+  2026-10-20 or later** (`86BOX_COMMIT` or newer), with
+  [#8419](https://github.com/86Box/86Box/pull/8419),
+  [#8420](https://github.com/86Box/86Box/pull/8420) and
+  [#8421](https://github.com/86Box/86Box/pull/8421) (all merged). With them,
+  recordings and videos carry the guest's sound on the emulated clock, the
+  sound tools measure it, and frames and sound come over the automation
+  connection, so `vm_attach` over TCP records here too. On an older 86Box,
+  recordings are silent and their frames are written on 86Box's machine. The
   sound cards, OPL and the PC speaker are sample-exact. CD audio, the floppy
   and hard-disk sounds and the MIDI synths (MT-32, FluidSynth) are rendered on
   86Box threads, so they are dated by when each block arrives, within one

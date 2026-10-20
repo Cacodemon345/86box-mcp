@@ -390,9 +390,10 @@ def vm_attach(endpoint: str, token: str | None = None) -> str:
     """Control an 86Box that is already running, possibly on another machine, instead of starting one.
 
     endpoint: "tcp:<host>:<port>" or "unix:<path>". token: the contents of the token file that 86Box
-    wrote at startup (for TCP, unless 86Box runs with --automation-insecure). Paths in later tool
-    calls (media images, record_start directories) are paths on that machine; screenshots come back
-    over the connection.
+    wrote at startup (for TCP, unless 86Box runs with --automation-insecure). Media image paths in
+    later tool calls are paths on that machine. Screenshots, and recordings (frames and sound, with
+    an 86Box from 2026-10-20 or later), come back over the connection: record_start's directory is
+    on this machine.
     """
     global _vm, _held
     if _vm is not None and _vm.running():
@@ -1220,7 +1221,7 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
     """Record the screen: 86Box saves the displayed frame every interval_ms of emulated time into
     directory (one PNG per frame, named by emulated ms), whatever advances the clock. With audio
     (default), also every sound stream as WAVs on the same emulated clock, sample-exact for the
-    sound cards, OPL and PC speaker (needs 86Box's audio capture, 86Box/86Box#8420; without it,
+    sound cards, OPL and PC speaker (needs an 86Box from 2026-10-20 or later, 86Box#8420; without it,
     video only). The sound is fetched over the automation connection, so it is saved here even for
     a VM attached on another machine (vm_attach); the frames are saved on 86Box's machine.
 

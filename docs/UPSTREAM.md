@@ -33,7 +33,7 @@ Merged on 2026-10-19:
 | [#8405](https://github.com/86Box/86Box/pull/8405) | `tablet x y buttons` / `tablet out`: absolute input for a configured tablet or touchscreen (the `tablet` tool) |
 | [#8416](https://github.com/86Box/86Box/pull/8416) | `regs` returns CR2, CR3, CR4, the debug registers, the descriptor caches, GDTR/IDTR/LDTR/TR, CPL, SMM and the TSC; a new `fpu` command returns the x87 and MMX registers (`registers`, `fpu_registers`, and the protected-mode tools built on them). There is no CR1 on x86 |
 
-Open, for sound (used by the `automation-audio` branch):
+Merged on 2026-10-20, for sound and for recording a VM on another machine:
 
 | Pull request | What it adds |
 |---|---|
@@ -41,7 +41,8 @@ Open, for sound (used by the `automation-audio` branch):
 | [#8420](https://github.com/86Box/86Box/pull/8420) | Sound capture on the emulated clock: `audio start`/`stop`, `audio level`, `audio read`, `audio pull` (over the connection, for a client on another machine), `wait sound`, `wait silence`, and per-frame cycle and sample stamps (`frames.jsonl`) for recordings |
 | [#8421](https://github.com/86Box/86Box/pull/8421) | Recorded frames over the connection (`record start` without a directory, `record pull`; zstd, XORed with the previous frame), so a client on another machine gets a recording's frames. Stacked on #8420 |
 
-`86BOX_COMMIT` names an upstream commit with all of them, the merge of #8416.
+`86BOX_COMMIT` names an upstream commit with all of them: master as of
+2026-10-20 (`a29194bdc`), after #8419, #8420 and #8421.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 
