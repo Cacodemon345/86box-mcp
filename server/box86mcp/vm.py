@@ -213,6 +213,21 @@ def _ini_get(lines: list[str], section: str, key: str) -> str | None:
     return None
 
 
+def configure_serial_automation(vm_dir: str | os.PathLike, port: int) -> bool:
+    """Give COM<port> 86Box's automation backend (serialN_device = automation), so the automation
+    socket carries the port both ways, in emulated time. Leaves the port alone, and returns False,
+    if the VM attaches some other device to it (a serial mouse, a host port, a pipe)."""
+    cfg = Path(vm_dir) / "86box.cfg"
+    lines = cfg.read_text().splitlines()
+    device = _ini_get(lines, "Ports (COM & LPT)", f"serial{port}_device")
+    if device not in (None, "none", "file", "automation"):
+        return False
+    lines = _ini_set(lines, "Ports (COM & LPT)", f"serial{port}_enabled", "1")
+    lines = _ini_set(lines, "Ports (COM & LPT)", f"serial{port}_device", "automation")
+    _rewrite_cfg(cfg, lines)
+    return True
+
+
 def configure_serial_capture(vm_dir: str | os.PathLike, port: int = 1) -> Path | None:
     """Send COM<port> output to <vm_dir>/com<port>.log via 86Box's file backend.
 
@@ -286,6 +301,8 @@ class VM:
         self.proc: subprocess.Popen | None = None
         self.serial_logs: dict[int, Path] = {}
         self.serial_offsets: dict[int, int] = {}
+        # COM ports on the automation backend: port -> where serial_read goes on from.
+        self.serial_ports: dict[int, int] = {}
         # UNIX socket on Linux/macOS (owner-only); TCP on loopback where there are no UNIX sockets.
         self.transport = os.environ.get("BOX86_TRANSPORT", "tcp" if os.name == "nt" else "unix")
         if self.transport == "tcp":
@@ -311,12 +328,14 @@ class VM:
         self.breaks: set[tuple[int, str, int]] = set()   # (address, kind, length) set through the stub
 
     def start(self, held: bool = True, window: bool | None = None, extra_args: list[str] | None = None,
-              com1_log: bool = False, debugger: bool = False) -> dict:
+              com1_log: bool = False, debugger: bool = False, serial_ports: list[int] | None = None) -> dict:
         """Launch 86Box. window=True shows the normal 86Box window (on $DISPLAY, outside Windows);
         the default, None, shows it on Windows and runs headless elsewhere. com1_log=True captures
         COM1 output (off by default: with it, runs are not always byte-for-byte reproducible).
         debugger=True attaches to 86Box's GDB stub, for breakpoints, instruction steps and port I/O
-        (86Box built with -D GDBSTUB=ON); see self.gdb."""
+        (86Box built with -D GDBSTUB=ON); see self.gdb. serial_ports: COM ports to give the
+        automation backend (both directions over the automation socket; needs an 86Box with it), e.g.
+        [1]; COM1 there takes precedence over com1_log."""
         if not (self.vm_dir / "86box.cfg").exists():
             raise FileNotFoundError(f"{self.vm_dir}/86box.cfg not found")
         if not self.binary.exists():
@@ -333,6 +352,12 @@ class VM:
             # Every 86Box stub listens on 12345 unless told otherwise; give this one its own port.
             cfg = self.vm_dir / "86box.cfg"
             _rewrite_cfg(cfg, _ini_set(cfg.read_text().splitlines(), "General", "gdbstub_port", str(_free_port())))
+        self.serial_ports = {}
+        for port in serial_ports or []:
+            if not configure_serial_automation(self.vm_dir, port):
+                raise ValueError(f"COM{port} already has a device in {self.vm_dir}/86box.cfg")
+        if 1 in (serial_ports or []):
+            com1_log = False
         log = configure_serial_capture(self.vm_dir, 1) if com1_log else None
         if log:
             self.serial_logs[1] = log
@@ -389,6 +414,15 @@ class VM:
             self.stop()
             raise AutomationError(f"86Box speaks automation protocol {status.get('protocol')}; "
                                   f"this server supports {sorted(SUPPORTED_PROTOCOLS)}")
+        for port in serial_ports or []:
+            try:
+                self.serial_ports[port] = self.auto.serial_out(port, 0, 1)["pos"]
+            except AutomationError as e:
+                self.stop()
+                if "unknown command" in str(e):
+                    raise AutomationError(f"{self.binary} has no serial ports on its automation socket "
+                                          "(an 86Box with serialN_device = automation is needed)") from e
+                raise
         if debugger:
             self.attach_debugger()
         elif not held:
@@ -573,9 +607,17 @@ class VM:
 
     def serial_read(self, port: int = 1, from_start: bool = False) -> str:
         """Text the guest wrote to COM<port> since the last read (or since boot)."""
+        if port in self.serial_ports:
+            r = self.auto.serial_out(port, 0 if from_start else self.serial_ports[port])
+            self.serial_ports[port] = r["next"]
+            data = r["data"]
+            if r["lost"]:
+                data = f"[{r['lost']} bytes lost: more than 64 KiB arrived between reads]\n".encode() + data
+            return data.decode("latin-1")
         log = self.serial_logs.get(port)
         if log is None:
-            raise RuntimeError(f"COM{port} is not captured (the VM attaches another device to it)")
+            raise RuntimeError(f"COM{port} is not captured: start the VM with serial=[{port}] "
+                               f"(or com1_log=True for COM1 output only)")
         offset = 0 if from_start else self.serial_offsets.get(port, 0)
         try:
             with open(log, "rb") as f:
@@ -703,6 +745,9 @@ class AttachedVM(VM):
         self.auto = Automation(endpoint, self.token_file)
         self._init_debugger(endpoint[4:].rsplit(":", 1)[0] if endpoint.startswith("tcp:") else "127.0.0.1")
         self.auto.connect(wait=10)
+        # Its COM ports on the automation backend, read on from where they are now.
+        self.serial_ports = {p["port"]: p["pos"] for p in self.auto.info().get("serial", [])
+                             if p.get("device") == "automation" and "pos" in p}
 
     def _stub_port(self, wait: float = 0.0) -> int | None:
         return 12345        # no log to read it from; the stub's default

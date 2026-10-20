@@ -21,6 +21,7 @@ from . import disk
 from . import keys as K
 from . import x86
 from .gdbrsp import BREAK_KINDS, Gdb, describe_stop
+from . import serialpeers
 from .protocol import AutomationError
 from .vm import VM, machine_of, prime_nvr, write_config
 
@@ -152,7 +153,7 @@ def _advance(ms: int) -> None:
 def _step(ms: int) -> dict:
     """Step the selected VM ms, and every other held VM in its group with it, in lockstep."""
     states = [(n, st) for n, st in _group_states(_group_of(_current)) if st.held]
-    if len(states) > 1 and any(n == _current for n, _ in states):
+    if (len(states) > 1 or _has_serial(_current)) and any(n == _current for n, _ in states):
         _run_in_lockstep(states, ms, _quantum_ms)
         return vm().auto.status()
     return vm().auto.step(ms)
@@ -166,7 +167,7 @@ def _wait(native, timeout_ms: int, carry=None) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
     states = [(n, st) for n, st in _group_states(_group_of(_current)) if st.held]
-    if len(states) <= 1 or not any(n == _current for n, _ in states):
+    if (len(states) <= 1 and not _has_serial(_current)) or not any(n == _current for n, _ in states):
         return native(timeout_ms)
     me = vm()
     others = [st for n, st in states if n != _current]
@@ -182,6 +183,7 @@ def _wait(native, timeout_ms: int, carry=None) -> dict:
             ran = r["ms"] - before
             if ran < q:
                 me.auto.step(q - ran)
+            _pump_serial(states)
             waited += q
             if r.get("matched") or waited >= timeout_ms:
                 return r
@@ -347,14 +349,19 @@ def _default_vm_dir() -> str:
 
 @tool()
 def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None = None, com1_log: bool = False,
-             debugger: bool = False, binary: str | None = None, group: str | None = None) -> str:
+             debugger: bool = False, binary: str | None = None, group: str | None = None,
+             serial: list[int] | None = None) -> str:
     """Boot the 86Box machine whose 86box.cfg lives in vm_dir. Without vm_dir: the VM this session
     last created or started, else $BOX86_VM_DIR, else the last VM started by any session.
 
     held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
     window=True shows the 86Box window on the host's display so a person can watch (and also type),
     and window=False runs without one. By default the window shows on Windows, and not elsewhere.
-    com1_log=True captures COM1 output for serial_read and wait_for_serial; it's off by default because with it, runs aren't always exactly reproducible.
+    serial: COM ports to carry over the automation socket, both ways and in emulated time, e.g. [1]
+    or [1, 2]: serial_read, wait_for_serial and serial_write use them, and serial_attach and
+    serial_link put something at the other end. Needs an 86Box with the automation serial backend.
+    com1_log=True, for an 86Box without it, captures COM1 output only, through a file; it's off by
+    default because with it, runs aren't always exactly reproducible.
     debugger=True attaches to 86Box's GDB stub for breakpoint_set, run_until_break,
     step_instructions, debug_continue, io_read/io_write and the PCI tools; it needs 86Box built with
     -D GDBSTUB=ON.
@@ -376,7 +383,8 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
     if binary:
         _binary = _find_binary(binary)
     _vm = VM(vm_dir, binary=_binary) if _binary else VM(vm_dir)
-    status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger)
+    _detach_serial(_current)
+    status = _vm.start(held=held, window=window, com1_log=com1_log, debugger=debugger, serial_ports=serial)
     _held = held
     _last_dir = _vm.vm_dir
     _remember_vm_dir(_vm.vm_dir)
@@ -423,6 +431,7 @@ def vm_stop(power_off: bool = True, soft: bool = False, timeout_s: int = 60) -> 
 
     if _vm is None or not _vm.running():
         return "no VM running"
+    _detach_serial(_current)
     if soft and power_off:
         stopped = _vm.power_off_soft(timeout_s)
         _held = False
@@ -552,6 +561,284 @@ def _run_in_lockstep(states, ms: int, quantum_ms: int) -> None:
     with ThreadPoolExecutor(len(states)) as pool:
         for q in [quantum_ms] * rounds + ([rest] if rest else []):
             list(pool.map(lambda nst: nst[1].vm.auto.step(q), states))
+            _pump_serial(states)
+
+
+class _SerialEnd:
+    """One end of a serial link: a VM's COM port, and how far its output has been passed on."""
+
+    def __init__(self, vm_name: str, port: int, wiring: str = "full"):
+        self.vm_name, self.port, self.next, self.carry = vm_name, port, 0, b""
+        self.wiring = wiring
+        self.sent = 0
+        self.lost = 0
+
+
+# Null-modem cables between VMs' COM ports (each with serialN_device = automation).
+_serial_links: list[tuple[_SerialEnd, _SerialEnd]] = []
+
+
+def _has_serial(name: str) -> bool:
+    """Whether a VM's COM ports have something at the other end that needs pumping."""
+    return any(n == name for n, _ in _serial_peers) or any(e.vm_name == name for link in _serial_links for e in link)
+
+
+def _pump_serial(states) -> None:
+    """Between quanta: move bytes over the serial links and to and from the host-side peers."""
+    if _serial_peers:
+        _pump_serial_peers(states)
+    if _serial_links:
+        _pump_serial_links(states)
+
+
+def _pump_serial_links(states) -> None:
+    """Each end's new output becomes the other end's input, and each end's DTR and RTS become the
+    other's DSR/DCD and CTS, as a null-modem cable wires them. Both VMs are held here, so where the
+    bytes land in emulated time doesn't depend on the host."""
+    running = {n: st for n, st in states}
+    for a, b in _serial_links:
+        if a.vm_name not in running or b.vm_name not in running:
+            continue
+        auto = {a: running[a.vm_name].vm.auto, b: running[b.vm_name].vm.auto}
+        out = {}
+        for src in (a, b):
+            r = auto[src].serial_out(src.port, src.next)
+            src.next, src.lost = r["next"], src.lost + r["lost"]
+            out[src] = r
+        for src, dst in ((a, b), (b, a)):
+            data = src.carry + out[src]["data"]
+            src.carry = b""
+            if data:
+                taken = auto[dst].serial_in(dst.port, data)
+                src.sent += taken
+                src.carry = data[taken:]        # the peer's UART is behind: the rest goes next quantum
+            _set_link_lines(auto[dst], dst, out[src], out[dst])
+
+
+# How a cable drives a port's CTS, DSR and DCD, from the far end's and its own DTR and RTS.
+_WIRINGS = ("full", "loopback", "none")
+
+
+def _set_link_lines(auto, end: _SerialEnd, far: dict, own: dict) -> None:
+    if end.wiring == "full":
+        lines = far["rts"], far["dtr"], far["dtr"]
+    elif end.wiring == "loopback":
+        lines = own["rts"], own["dtr"], own["dtr"]
+    else:
+        lines = 1, 1, 1
+    auto.serial_lines(end.port, cts=lines[0], dsr=lines[1], dcd=lines[2])
+
+
+@tool()
+def serial_link(vm_a: str, vm_b: str, port_a: int = 1, port_b: int = 1, wiring: str = "full",
+                unlink: bool = False) -> str:
+    """Join two VMs' COM ports with a null-modem cable, for serial multiplayer and file transfer
+    between guests. unlink=True removes it.
+
+    Both ports need the automation backend (serialN_device = automation in each 86box.cfg), and both
+    VMs must be held in one lockstep group (see vm_group): bytes cross after every lockstep quantum,
+    so a quantum of 10 ms delays each byte by up to 10 ms. The guests' baud rates are their own
+    business: bytes reach each guest at the rate its UART is set to.
+
+    wiring, the handshake lines as null-modem cables wire them:
+    - "full": each side's RTS drives the other's CTS, and DTR the other's DSR and DCD. Software
+      that raises them (most comms programs and games) needs this.
+    - "loopback": each side's own RTS drives its CTS, and DTR its DSR and DCD. The BIOS serial
+      routines (INT 14h, so DOS's COPY to and from COM1) raise only DTR while receiving, which
+      stalls the sender on a full cable.
+    - "none": CTS, DSR and DCD always on.
+    """
+    for name in (vm_a, vm_b):
+        st = _vms.get(name)
+        if st is None or st.vm is None or not st.vm.running():
+            raise AutomationError(f"no running VM called {name!r}")
+    key = {(vm_a, port_a), (vm_b, port_b)}
+    for link in list(_serial_links):
+        if {(e.vm_name, e.port) for e in link} == key:
+            _serial_links.remove(link)
+            if unlink:
+                return f"unlinked {vm_a} COM{port_a} and {vm_b} COM{port_b}"
+    if unlink:
+        raise ValueError(f"no link between {vm_a} COM{port_a} and {vm_b} COM{port_b}")
+    if wiring not in _WIRINGS:
+        raise ValueError(f"wiring must be one of {', '.join(_WIRINGS)}")
+    if _group_of(vm_a) != _group_of(vm_b):
+        raise ValueError(f"{vm_a} and {vm_b} are in different groups; put them in one with vm_group")
+    for name, port in ((vm_a, port_a), (vm_b, port_b)):
+        if any((e.vm_name, e.port) == (name, port) for link in _serial_links for e in link):
+            raise ValueError(f"{name} COM{port} is already linked")
+    ends = (_SerialEnd(vm_a, port_a, wiring), _SerialEnd(vm_b, port_b, wiring))
+    state = {}
+    for end in ends:
+        # From now on: what the guest sent before the cable was plugged in stays on its side.
+        state[end] = _vms[end.vm_name].vm.auto.serial_out(end.port, 0, 1)
+        end.next = state[end]["pos"]
+    for end, far in (ends, ends[::-1]):
+        _set_link_lines(_vms[end.vm_name].vm.auto, end, state[far], state[end])
+    _serial_links.append(ends)
+    return f"linked {vm_a} COM{port_a} and {vm_b} COM{port_b} (null modem, {wiring} handshake)"
+
+
+@tool()
+def serial_links() -> list[dict]:
+    """The serial links: each end's VM, port, bytes passed to the other end, and bytes lost because
+    the guest sent more than 64 KiB within one quantum."""
+    return [{"a": f"{a.vm_name} COM{a.port}", "b": f"{b.vm_name} COM{b.port}", "wiring": a.wiring,
+             "a_to_b": a.sent, "b_to_a": b.sent, "lost": a.lost + b.lost,
+             "waiting": len(a.carry) + len(b.carry)} for a, b in _serial_links]
+
+
+class _PeerEnd:
+    """A host-side peer on one VM's COM port, and how far the guest's output has gone to it."""
+
+    def __init__(self, peer: serialpeers.Peer, start: int):
+        self.peer, self.next, self.carry = peer, start, b""
+        self.to_peer = self.to_guest = self.lost = 0
+        self.lines: tuple | None = None
+
+
+_serial_peers: dict[tuple[str, int], _PeerEnd] = {}    # (VM name, port) -> its peer
+
+
+def _pump_serial_peers(states) -> None:
+    running = {n: st for n, st in states}
+    for (name, port), end in list(_serial_peers.items()):
+        st = running.get(name)
+        if st is None:
+            continue
+        auto = st.vm.auto
+        r = auto.serial_out(port, end.next)
+        end.next, end.lost = r["next"], end.lost + r["lost"]
+        end.to_peer += len(r["data"])
+        peer = end.peer
+        if getattr(peer, "pending_dial", None) is not None:
+            # CONNECT reports the guest UART's speed, as a modem would report the line's.
+            peer.baud = next((p.get("baud") for p in auto.info().get("serial", []) if p["port"] == port), None)
+        peer.from_guest(r["data"], r["ms"], bool(r["dtr"]), bool(r["rts"]))
+        data = end.carry + peer.to_guest(r["ms"])
+        if data:
+            taken = auto.serial_in(port, data)
+            end.to_guest += taken
+            end.carry = data[taken:]
+        lines = peer.lines().as_tuple()
+        if lines != end.lines:
+            auto.serial_lines(port, *lines)
+            end.lines = lines
+
+
+def _detach_serial(name: str, port: int | None = None) -> list[str]:
+    """Remove a VM's peers and links (on one port, or all); returns what was removed."""
+    gone = []
+    for (n, p), end in list(_serial_peers.items()):
+        if n == name and port in (None, p):
+            end.peer.close()
+            del _serial_peers[(n, p)]
+            gone.append(f"{end.peer.kind} on {n} COM{p}")
+    for link in list(_serial_links):
+        if any(e.vm_name == name and port in (None, e.port) for e in link):
+            _serial_links.remove(link)
+            gone.append(f"link {link[0].vm_name} COM{link[0].port} - {link[1].vm_name} COM{link[1].port}")
+    return gone
+
+
+def _serial_port(port: int) -> int:
+    v = vm()
+    if port not in v.serial_ports:
+        raise ValueError(f"COM{port} isn't on the automation socket: start the VM with serial=[{port}]")
+    return port
+
+
+@tool()
+def serial_attach(port: int = 1, peer: str = "modem", dial: dict[str, str] | None = None,
+                  default: str | None = None, address: str = "127.0.0.1:0", link: str | None = None,
+                  detach: bool = False) -> str:
+    """Put a device on the host side of one of the VM's COM ports (started with vm_start(serial=[port])).
+
+    peer:
+    - "modem": a Hayes-compatible modem whose phone line is TCP. A terminal program in the guest
+      (Telix, Procomm, Terminate) dials it as usual: ATDT 5551234 connects to the "host:port" that
+      dial maps the number to ({"5551234": "127.0.0.1:2323"}), or to default for any other number;
+      ATDT 127.0.0.1:2323 dials an address directly. It answers AT commands (Z, E, V, Q, H, O, S,
+      &F, &C, &D, I; others are accepted), reports CONNECT at the guest's speed, raises DCD while a
+      call is up, and hangs up on ATH, on +++ then ATH, when the guest drops DTR, or with NO CARRIER
+      when the far end closes the connection.
+    - "tcp": listens on address (port 0: any free one); the client that connects gets the guest's
+      port raw, with DCD and DSR up while connected, as the far end of a null-modem cable.
+    - "pty": a pseudo-terminal (POSIX) a host program opens, e.g. `minicom -D <path>`; link makes a
+      symlink to it at that path.
+    detach=True removes whatever is on the port (a peer or a serial_link).
+
+    Bytes move every lockstep quantum (10 ms of emulated time) while the VM runs, held or not; a VM
+    with a peer steps in quanta so traffic flows during step and the wait tools too. The far end runs
+    on the host's clock, so these sessions aren't reproducible run to run the way a held VM alone is.
+    """
+    name = _current
+    if detach:
+        gone = _detach_serial(name, port)
+        return "removed " + ", ".join(gone) if gone else f"nothing on {name} COM{port}"
+    _serial_port(port)
+    if (name, port) in _serial_peers or any((e.vm_name, e.port) == (name, port) for l in _serial_links for e in l):
+        raise ValueError(f"{name} COM{port} already has something attached; detach=True first")
+    if peer == "modem":
+        p = serialpeers.Modem(dial=dial, default=default)
+    elif peer == "tcp":
+        host, _, prt = address.rpartition(":")
+        p = serialpeers.TcpPeer(host or "127.0.0.1", int(prt or 0))
+    elif peer == "pty":
+        if os.name == "nt":
+            raise ValueError("pty needs a POSIX host; use peer='tcp' on Windows")
+        p = serialpeers.PtyPeer(link)
+    else:
+        raise ValueError("peer must be modem, tcp or pty")
+    v = vm()
+    _serial_peers[(name, port)] = _PeerEnd(p, v.auto.serial_out(port, 0, 1)["pos"])
+    v.auto.serial_lines(port, *p.lines().as_tuple())
+    _ensure_serial_pump_thread()
+    d = p.describe()
+    where = {"modem": lambda: f"dialling {default or 'nothing by default'}" + (f", numbers {dial}" if dial else ""),
+             "tcp": lambda: f"listening on {d['address']}",
+             "pty": lambda: f"at {d['path']}" + (f" (link {link})" if link else "")}[peer]()
+    return f"{peer} on {name} COM{port}, {where}"
+
+
+@tool()
+def serial_status() -> list[dict]:
+    """Every COM port with something on its host side: the peer (modem state and recent events,
+    pty path, TCP address and client) and the bytes moved each way."""
+    out = []
+    for (name, port), end in _serial_peers.items():
+        out.append({"vm": name, "port": port, **end.peer.describe(), "to_peer": end.to_peer,
+                    "to_guest": end.to_guest, "lost": end.lost, "waiting": len(end.carry)})
+    return out + [{"link": l["a"] + " - " + l["b"], **l} for l in serial_links()]
+
+
+_pump_thread: threading.Thread | None = None
+
+
+def _ensure_serial_pump_thread() -> None:
+    """Released (real-time) VMs don't step through the server, so a thread pumps their peers and
+    links every 10 ms of host time. Held VMs are pumped as they step."""
+    global _pump_thread
+    if _pump_thread and _pump_thread.is_alive():
+        return
+
+    def run():
+        while _serial_peers or _serial_links:
+            time.sleep(0.01)
+            if not _lock.acquire(timeout=0.05):
+                continue                 # a tool call is running; it pumps if it steps
+            try:
+                _save_current()
+                free = [(n, st) for n, st in _running_states() if not st.held and _has_serial(n)]
+                if free:
+                    _pump_serial(free)
+            except Exception:
+                pass
+            finally:
+                _lock.release()
+
+    _pump_thread = threading.Thread(target=run, name="serial-pump", daemon=True)
+    _pump_thread.start()
 
 
 @tool()
@@ -1510,7 +1797,8 @@ def _last_record_dir() -> Path:
 def serial_read(port: int = 1, from_start: bool = False) -> str:
     """Output the guest has written to a COM port since the last serial_read (from_start: since boot).
 
-    COM1 is captured when the VM was started with vm_start(com1_log=True). In DOS,
+    Needs the port on the automation socket (vm_start(serial=[port])), or for COM1 on an older 86Box,
+    vm_start(com1_log=True). The automation socket keeps the last 64 KiB. In DOS,
     `ECHO hello > COM1` or a program writing to the port shows up here; it is the easiest way to get
     debug logs out of your own programs.
     """
@@ -1525,6 +1813,14 @@ def wait_for_serial(text: str, port: int = 1, timeout_ms: int = 10000, poll_ms: 
     Returns the output seen while waiting, so a log line can be waited for and read in one call.
     """
     v = vm()
+    if port in v.serial_ports:
+        start = v.serial_ports[port]
+        a = v.auto
+        r = _wait(lambda t: a.wait_serial(port, start, text.encode("latin-1"), t), timeout_ms)
+        seen = v.serial_read(port)
+        if r.get("matched"):
+            return f"found at t={r['ms']}ms\n{seen}"
+        return f"TIMED OUT after {timeout_ms} ms\n{seen or '(no output)'}"
     seen = ""
     waited = 0
     while True:
@@ -1535,6 +1831,21 @@ def wait_for_serial(text: str, port: int = 1, timeout_ms: int = 10000, poll_ms: 
             return f"TIMED OUT after {timeout_ms} ms\n{seen or '(no output)'}"
         _advance(poll_ms)
         waited += poll_ms
+
+
+@tool()
+def serial_write(text: str = "", port: int = 1, hex: str = "") -> str:
+    """Send bytes to the guest on a COM port (started with vm_start(serial=[port])): text as it
+    stands (Latin-1; "\\r" for Enter, "\\x1a" for Ctrl+Z), or hex. They reach the guest at the rate
+    its UART is set to, as emulated time passes; up to 64 KiB can wait."""
+    _serial_port(port)
+    data = bytes.fromhex(hex) if hex else text.encode("latin-1")
+    if not data:
+        raise ValueError("nothing to send: give text or hex")
+    queued = vm().auto.serial_in(port, data)
+    if queued < len(data):
+        raise AutomationError(f"only {queued} of {len(data)} bytes queued: the guest's input queue is full")
+    return f"queued {queued} bytes for COM{port}"
 
 
 # Files ---------------------------------------------------------------------

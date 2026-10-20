@@ -270,3 +270,35 @@ class Automation:
 
     def wait_mem(self, addr: int, data: bytes, timeout_ms: int) -> dict:
         return self._chunked(timeout_ms, lambda q: self.call(f"wait mem {q} 0x{addr:x} {data.hex()}"))
+
+    # Serial ports with the "automation" backend (serialN_device = automation) ----------------
+
+    # Bytes per serial write, to stay well inside the socket's 4096-byte request line.
+    SERIAL_WRITE_CHUNK = 1900
+
+    def serial_out(self, port: int, from_pos: int = 0, max_bytes: int | None = None) -> dict:
+        """What the guest sent on COM<port> from position from_pos on: the reply, with "data" as bytes.
+        "next" is where to read from next; "lost" counts bytes dropped before they were read."""
+        r = self.call(f"serial read {int(port)} {int(from_pos)}" + (f" {int(max_bytes)}" if max_bytes else ""))
+        r["data"] = bytes.fromhex(r["data"])
+        return r
+
+    def serial_in(self, port: int, data: bytes) -> int:
+        """Queue bytes for the guest on COM<port>; they arrive at its UART's rate. Returns how many were
+        queued: fewer than given if the guest's input queue (64 KiB) filled up."""
+        for i in range(0, len(data), self.SERIAL_WRITE_CHUNK):
+            try:
+                self.call(f"serial write {int(port)} {data[i:i + self.SERIAL_WRITE_CHUNK].hex()}")
+            except AutomationError as e:
+                if "input queue full" in str(e):
+                    return i
+                raise
+        return len(data)
+
+    def serial_lines(self, port: int, cts: bool, dsr: bool, dcd: bool, ri: bool = False) -> dict:
+        """Set the modem status lines the guest sees on COM<port>; the reply has the guest's DTR/RTS."""
+        return self.call(f"serial lines {int(port)} {int(cts)} {int(dsr)} {int(dcd)} {int(ri)}")
+
+    def wait_serial(self, port: int, from_pos: int, text: bytes, timeout_ms: int) -> dict:
+        return self._chunked(timeout_ms, lambda q: self.call(
+            f"wait serial {q} {int(port)} {int(from_pos)} {text.decode('latin-1')}"))
