@@ -1207,7 +1207,7 @@ def record_start(directory: str, interval_ms: int = 100, audio: bool = True) -> 
     """Record the screen: 86Box saves the displayed frame every interval_ms of emulated time into
     directory (one PNG per frame, named by emulated ms), whatever advances the clock. With audio
     (default), also every sound stream as WAVs on the same emulated clock, sample-exact for the
-    sound cards, OPL and PC speaker (needs 86Box's audio capture, not in 86Box yet; without it,
+    sound cards, OPL and PC speaker (needs 86Box's audio capture, 86Box/86Box#8420; without it,
     video only).
 
     Use record_stop to finish; it can render a video, one video frame per recorded frame. For video
