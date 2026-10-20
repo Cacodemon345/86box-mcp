@@ -39,6 +39,20 @@ def make_dos_vm(dest: Path) -> Path:
     return dest
 
 
+@pytest.fixture(autouse=True)
+def headless(monkeypatch):
+    """No 86Box windows from the tests, on Windows too, where VM.start shows one by default.
+    BOX86_TEST_WINDOW=1 shows them, to watch a test."""
+    if os.environ.get("BOX86_TEST_WINDOW") == "1":
+        return
+    start = VM.start
+
+    def start_headless(self, *args, window=None, **kwargs):
+        return start(self, *args, window=False if window is None else window, **kwargs)
+
+    monkeypatch.setattr(VM, "start", start_headless)
+
+
 @pytest.fixture
 def dos_vm(tmp_path):
     vm = VM(make_dos_vm(tmp_path / "dos622"))

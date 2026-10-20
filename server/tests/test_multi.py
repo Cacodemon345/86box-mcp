@@ -29,9 +29,9 @@ def test_two_vms_in_lockstep(tmp_path):
                     return res.structured_content["result"] if tool == "vm_list" else text
 
                 out = {}
-                await call("vm_start", vm="p1", vm_dir=str(a))
+                await call("vm_start", vm="p1", vm_dir=str(a), window=False)
                 await call("step", vm="p1", ms=700)               # p1 starts ahead
-                await call("vm_start", vm="p2", vm_dir=str(b))
+                await call("vm_start", vm="p2", vm_dir=str(b), window=False)
                 out["step_all"] = await call("step_all", ms=8000, quantum_ms=5)
                 out["list"] = await call("vm_list")
                 out["p1"] = await call("screen_text", vm="p1")
