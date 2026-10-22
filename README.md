@@ -594,6 +594,16 @@ emulated machine, memory included. The design follows
 [dosbox-automation's](https://dosbox-automation.org/0.85.1/automation/security/index.html).
 Details are in the [protocol doc](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md#transports-and-security).
 
+> [!CAUTION]
+> **Never connect a machine running 86Box with `--automation-allow-remote` to
+> the internet**, nor to any network you don't fully trust, and never forward
+> its automation or GDB stub port through a router. The protocol is
+> unencrypted, so the token can be read off the wire, and the GDB stub has no
+> authentication at all. Whoever gets in controls the emulated machine and,
+> through it, can read any file 86Box can open and write files on the host
+> (see [Insecure mode](#insecure-mode)). To reach 86Box from elsewhere, use an
+> SSH tunnel ([below](#86box-on-another-machine)).
+
 ### 86Box on another machine
 
 `vm_attach` drives an 86Box that was started elsewhere, by hand or by a
@@ -669,12 +679,25 @@ already works:
 - **86Box's automation socket** over TCP (`BOX86_TRANSPORT=tcp`, the default
   on Windows) runs without its token: the server starts 86Box with
   `--automation-insecure`, and `vm_attach` connects to any 86Box started that
-  way without one. Any local process can then drive the VM.
+  way without one. Any local process can then use everything the protocol
+  offers, and with `--automation-allow-remote` so can anyone who can reach the
+  port:
+  - drive the VM, read and write its memory, reset it and power it off;
+  - load any file 86Box can open, as a floppy or CD image, and read it
+    through the guest: your documents and keys as well as disk images;
+  - write files into the VM folder's `automation-media` directory
+    (`media put`, [86Box#8466](https://github.com/86Box/86Box/pull/8466)),
+    as many and as large as they like, until the disk is full.
 - **The MCP server's HTTP transport** may listen on any address, set with
   `BOX86_MCP_HTTP_HOST` (for example `0.0.0.0`), without the DNS-rebinding
   checks. Anyone who can reach that port can drive the VM and, through the
   server's tools, **read and write files on this machine as you**. HTTPS
   (above) encrypts the connection, but doesn't authenticate the client.
+
+Insecure mode doesn't hold any of this back: it is for a single-user machine,
+or a private network where you trust every device. **Never use it with
+`--automation-allow-remote` or a non-loopback `BOX86_MCP_HTTP_HOST` on a
+machine connected to the internet.**
 
 Without `BOX86_INSECURE=1`, a non-loopback `BOX86_MCP_HTTP_HOST` is refused.
 `--automation-insecure` needs an 86Box with
