@@ -15,10 +15,11 @@ from conftest import make_dos_vm
 from test_sound import run
 
 
-def test_media_and_log_reach_an_86box_attached_over_tcp(tmp_path, monkeypatch):
+@pytest.mark.parametrize("transport", ["tcp", "unix"])
+def test_media_and_log_reach_an_attached_86box(tmp_path, monkeypatch, transport):
     from box86mcp.vm import VM
 
-    monkeypatch.setenv("BOX86_TRANSPORT", "tcp")
+    monkeypatch.setenv("BOX86_TRANSPORT", transport)
     here = tmp_path / "here"                                # this machine's files
     here.mkdir()
     (here / "HELLO.TXT").write_text("SENT OVER THE SOCKET\r\n")
@@ -30,7 +31,7 @@ def test_media_and_log_reach_an_86box_attached_over_tcp(tmp_path, monkeypatch):
         assert vm.auto.wait_text("C:\\>", 60000)["matched"]
         if not vm.auto.can_put_files():
             pytest.skip("86Box without media put")
-        token = open(vm.token_file).read().strip()
+        token = open(vm.token_file).read().strip() if vm.token_file else None
         vm.auto.close()                                     # one client at a time
         env = dict(os.environ, XDG_CACHE_HOME=str(tmp_path / "cache"))
 
