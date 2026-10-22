@@ -394,21 +394,30 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
 
 
 @tool()
-def vm_attach(endpoint: str, token: str | None = None) -> str:
+def vm_attach(endpoint: str, token: str | None = None, gdb_port: int | None = None) -> str:
     """Control an 86Box that is already running, possibly on another machine, instead of starting one.
 
     endpoint: "tcp:<host>:<port>" or "unix:<path>". token: the contents of the token file that 86Box
-    wrote at startup (for TCP, unless 86Box runs with --automation-insecure). Media image paths in
-    later tool calls are paths on that machine. Screenshots, and recordings (frames and sound, with
-    an 86Box from 2026-10-20 or later), come back over the connection: record_start's directory is
-    on this machine.
+    wrote at startup (for TCP, unless 86Box runs with --automation-insecure). gdb_port: its GDB stub's
+    port, for the debugger tools, if 86Box doesn't say (86Box from before 2026-10-22; default 12345);
+    the stub is reached on the endpoint's host.
+
+    Over the connection, with an 86Box from 2026-10-22 or later: media (an image file on this
+    machine given to floppy_insert or cdrom_insert, a .cue with its tracks, and the images
+    dos_put_floppy and cdrom_insert(files=) build) is sent to 86Box, into its VM directory's
+    automation-media folder, and vm_status's log comes from 86Box. A path that isn't a file here,
+    or any path with an older 86Box, is a path on 86Box's machine. A floppy the guest writes to
+    changes the copy there, not the file here. Screenshots, and recordings (frames and sound, with an
+    86Box from 2026-10-20 or later), come back over the connection: record_start's directory is on
+    this machine. vm_create, dos_create_vm and dos_install_files work on VM folders on this machine
+    only.
     """
     global _vm, _held
     if _vm is not None and _vm.running():
         _vm.stop()
     from .vm import AttachedVM
 
-    _vm = AttachedVM(endpoint, token)
+    _vm = AttachedVM(endpoint, token, gdb_port)
     status = _vm.auto.status()
     _held = bool(status.get("held"))
     info = _vm.auto.info()
@@ -1866,13 +1875,12 @@ def floppy_insert(image: str, drive: str = "A", write_protect: bool = False) -> 
     """Insert an existing floppy image (.img/.ima/.86f, ...) in drive A: or B:. Works for any guest.
 
     With the Docker-run 86Box, images outside $HOME and /tmp are copied first. With
-    write_protect=False the guest can write to the image file itself.
+    write_protect=False the guest can write to the image file itself. For a VM joined with vm_attach,
+    see there.
     """
     v = vm()
-    path = v.visible(image)
-    index = 0 if drive.upper().startswith("A") else 1
-    v.load_floppy(("wp://" if write_protect else "") + str(path), index)  # str: Path would collapse "//"
-    return f"inserted {path.name} in {drive.upper()[0]}:"
+    v.load_floppy(image, 0 if drive.upper().startswith("A") else 1, write_protect)
+    return f"inserted {Path(image).name} in {drive.upper()[0]}:"
 
 
 @tool()

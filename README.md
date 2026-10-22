@@ -594,6 +594,54 @@ emulated machine, memory included. The design follows
 [dosbox-automation's](https://dosbox-automation.org/0.85.1/automation/security/index.html).
 Details are in the [protocol doc](https://github.com/86Box/86Box/blob/master/doc/specifications/automation.md#transports-and-security).
 
+### 86Box on another machine
+
+`vm_attach` drives an 86Box that was started elsewhere, by hand or by a
+script. Most tools work the same over the connection:
+
+- **Input, screens, memory, registers, waits, lockstep groups and serial
+  ports** all go through the automation socket.
+- **Recordings** (frames and sound) come back over the connection, and
+  `record_start`'s directory is on the MCP server's machine.
+- **Media:** an image file on the MCP server's machine, given to
+  `floppy_insert` or `cdrom_insert`, is sent to 86Box first. That includes a
+  `.cue` and its tracks, and the images that `dos_put_floppy` and
+  `cdrom_insert(files=...)` build. 86Box keeps the copies in its VM
+  directory's `automation-media` folder. A path that isn't a file here is
+  taken as a path on 86Box's machine. If the guest writes to a floppy, it
+  changes 86Box's copy, not yours.
+- **`vm_status`'s log tail** comes from 86Box over the connection, and so
+  does the message when 86Box stops with a fatal error.
+- **The debugger** connects to the GDB stub on the endpoint's host, at the
+  port 86Box reports, or at `vm_attach(gdb_port=...)`.
+
+These need 86Box's `media put` and `log` commands (sending media, the log,
+fatal errors and the stub's port), which aren't upstream yet. Without them,
+media paths are paths on 86Box's machine, there's no log tail, and the
+debugger assumes the stub's default port, 12345.
+
+Some tools only work where the MCP server runs:
+
+- `vm_create`, `dos_create_vm`, `dos_install_files` and `vm_start` work on VM
+  folders on the MCP server's own machine. To get a VM onto 86Box's machine,
+  copy its folder there once 86Box has exited, since it saves the CMOS when
+  it exits.
+
+Neither the automation socket nor the GDB stub is encrypted, and the stub has
+no authentication at all: it listens on every interface, so firewall its port.
+Rather than `--automation-allow-remote`, keep 86Box on `127.0.0.1` and tunnel
+both ports over SSH:
+
+```sh
+ssh -N -L 7086:127.0.0.1:7086 -L 12345:127.0.0.1:12345 user@86box-host
+# then: vm_attach("tcp:127.0.0.1:7086", "<token>")
+```
+
+Every `step`, `wait` and key press is a round trip, and a lockstep group
+makes one per quantum (10 ms by default). On a LAN that doesn't matter. Over
+a link with a 50 ms round trip, a group runs at about a fifth of real time,
+and a larger `vm_group(quantum_ms=...)` helps.
+
 ### Between your agent and the MCP server
 
 By default the MCP server talks to its client over stdio, as a child process.

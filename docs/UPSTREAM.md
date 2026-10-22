@@ -48,6 +48,17 @@ Also merged on 2026-10-20, for serial ports and repeatable runs:
 | [#8439](https://github.com/86Box/86Box/pull/8439) | The `automation` serial backend (`serialN_device = automation`): `serial read`, `serial write`, `serial lines`, `wait serial`, and COM ports in `info` (`vm_start(serial=...)`, `serial_write`, `serial_link`, `serial_attach`). Input reaches the guest at its line rate |
 | [#8438](https://github.com/86Box/86Box/pull/8438) | `--automation-seed n`: 86Box's random numbers (generated MACs, 86F weak bits) from a fixed seed instead of the host's timestamp counter |
 
+Not submitted yet, on the `automation-remote` branch of
+[dafugg/86Box](https://github.com/dafugg/86Box/tree/automation-remote), for
+driving an 86Box on another machine:
+
+| Change | What it adds |
+|---|---|
+| `media put`, `media remove` | A client sends a file (raw bytes after the request line), which lands in the VM directory's `automation-media` folder, to load with `fdd load` / `cd load` (`floppy_insert`, `cdrom_insert`, `dos_put_floppy` on an attached VM) |
+| `log` | The last 64 KB of 86Box's log (`vm_status`'s log tail on an attached VM) |
+| fatal errors | A connected client gets `{"ok":false,"fatal":true,"error":...}` before the socket closes |
+| `info` `gdbstub_port` | The GDB stub's port, so an attached VM's debugger finds it |
+
 `86BOX_COMMIT` names an upstream commit with all of them: master as of
 2026-10-20 (`1de9fc333`), the merge of #8439.
 The server checks for `ff` in `status` before sending `quit soft`, because an

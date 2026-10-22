@@ -728,12 +728,17 @@ class VM:
             path = copy
         return path
 
+    def media(self, path: str | os.PathLike) -> str:
+        """An image file, as 86Box can open it."""
+        return str(self.visible(path))      # str: Path would collapse "//"
+
     def load_cdrom(self, image: str | os.PathLike, drive: int = 0) -> dict:
         """Insert a CD image."""
-        return self.auto.call(f"cd load {drive} {self.visible(image)}")
+        return self.auto.call(f"cd load {drive} {self.media(image)}")
 
-    def load_floppy(self, img: str | os.PathLike, drive: int = 0) -> dict:
+    def load_floppy(self, img: str | os.PathLike, drive: int = 0, write_protect: bool = False) -> dict:
         """Insert a floppy image. 86Box answers ok even when it can't load one, so check it's in."""
+        img = ("wp://" if write_protect else "") + self.media(img)
         reply = self.auto.call(f"fdd load {drive} {img}")
         if not any(f["drive"] == drive for f in self.auto.info()["floppy"]):
             raise AutomationError(f"86Box did not load the floppy image {img}; the log may say why:\n"
@@ -742,14 +747,23 @@ class VM:
 
 
 
+def _media_name(name: str) -> str:
+    """A file name as 86Box's media put accepts it: letters, digits, ".", "-" and "_"."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[-128:]
+    return "_" + name[1:] if name.startswith(".") else name
+
+
 class AttachedVM(VM):
     """An 86Box started elsewhere (another machine, or by hand), reached at an endpoint.
 
     vm_stop disconnects rather than powering it off.
     """
 
-    def __init__(self, endpoint: str, token: str | None = None):
+    def __init__(self, endpoint: str, token: str | None = None, gdb_port: int | None = None):
         self.vm_dir = None
+        self._gdb_port = gdb_port
+        self._sent: dict[tuple, str] = {}   # files sent with media put: (path, size, mtime) -> its path there
+        self._can_send: bool | None = None
         self.run_dir = Path(tempfile.mkdtemp(prefix="box86mcp-attach-"))
         self.log_path = self.run_dir / "86box.log"
         self.proc = None
@@ -771,7 +785,58 @@ class AttachedVM(VM):
                              if p.get("device") == "automation" and "pos" in p}
 
     def _stub_port(self, wait: float = 0.0) -> int | None:
-        return 12345        # no log to read it from; the stub's default
+        # As given to vm_attach, else as 86Box says (2026-10-22 on), else the stub's default.
+        if self._gdb_port:
+            return self._gdb_port
+        try:
+            return self.auto.info().get("gdbstub_port") or 12345
+        except (AutomationError, OSError):
+            return 12345
+
+    def log_tail(self, lines: int = 40) -> str:
+        """The end of 86Box's log, over the connection (an 86Box from 2026-10-22 on)."""
+        try:
+            text = self.auto.log()["text"]
+        except (AutomationError, OSError):
+            return ""
+        return "\n".join(text.splitlines()[-lines:])
+
+    def media(self, path: str | os.PathLike) -> str:
+        """An image file here is sent to 86Box over the connection (media put), and 86Box opens its
+        copy; any other path, or with an 86Box from before 2026-10-22, is a path on its machine."""
+        local = Path(path).expanduser()
+        if not local.is_file():
+            return str(path)
+        if self._can_send is None:
+            self._can_send = self.auto.can_put_files()
+        if not self._can_send:
+            return str(path)
+        local = local.resolve()
+        if local.suffix.lower() == ".cue":
+            return self._send_cue(local)
+        return self._send(local)
+
+    def _send(self, local: Path, name: str | None = None) -> str:
+        st = local.stat()
+        key = (str(local), st.st_size, st.st_mtime_ns, name)
+        if key not in self._sent:
+            self._sent[key] = self.auto.put_file(name or _media_name(local.name), local)["path"]
+        return self._sent[key]
+
+    def _send_cue(self, cue: Path) -> str:
+        """A cue sheet and the track files it names, under names 86Box accepts, with the sheet
+        rewritten to match."""
+        text = cue.read_text(errors="replace")
+
+        def track(m: re.Match) -> str:
+            name = _media_name(Path(m.group(2)).name)
+            self._send(cue.parent / m.group(2), name)
+            return f'{m.group(1)}"{name}"'
+
+        text = re.sub(r'^(\s*FILE\s+)"([^"]+)"', track, text, flags=re.M | re.I)
+        sheet = self.run_dir / _media_name(cue.name)
+        sheet.write_text(text)
+        return self._send(sheet)
 
     def running(self) -> bool:
         return self.auto.sock is not None

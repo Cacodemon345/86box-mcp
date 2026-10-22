@@ -201,3 +201,31 @@ def test_debugger_through_an_mcp_client(tmp_path):
     assert out["cmos"][1] == (False, "port 0x71: 0x26"), out["cmos"]
     assert not out["pci"][0] and "1039:0496" in out["pci"][1], out["pci"]
     assert "MS-DOS Version 6.22" in out["dos"][1], out["dos"]
+
+
+@needs_gdb_build
+def test_an_attached_vm_finds_the_stub_port(tmp_path, monkeypatch):
+    """vm_attach has no log to read the stub's port from; 86Box says it in info."""
+    from box86mcp.vm import VM, AttachedVM
+
+    monkeypatch.setenv("BOX86_TRANSPORT", "tcp")
+    vm = VM(make_dos_vm(tmp_path / "vm"), binary=Path(GDB_BINARY))
+    vm.start(held=True, debugger=True)                      # on a free port, not the default
+    other = None
+    try:
+        vm.gdb.close()
+        vm.gdb = None
+        token = open(vm.token_file).read().strip()
+        vm.auto.close()                                     # one client at a time
+        other = AttachedVM(vm.endpoint, token)
+        if "gdbstub_port" not in other.auto.info():
+            pytest.skip("86Box without gdbstub_port in info")
+        assert other._stub_port() == vm.gdb_port != 12345
+        gdb = other.attach_debugger()
+        assert other.auto.wait_text("C:\\>", 60000)["matched"]
+        assert gdb.mem(0x449, 1) == b"\x03"                 # held, the stub still answers: text mode 3
+    finally:
+        if other:
+            other.stop()
+        vm.auto.connect()
+        vm.stop()

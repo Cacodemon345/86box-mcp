@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 import time
@@ -132,6 +133,13 @@ class Automation:
             self.connect()
         assert self.sock
         self.sock.sendall(line.encode("latin-1") + b"\n")
+        reply = self._reply()
+        if reply.get("stopped") == "debugger" and self.on_debugger_stop:
+            return self.on_debugger_stop(line, reply)
+        return reply
+
+    def _reply(self) -> dict:
+        assert self.sock
         while b"\n" not in self._buf:
             chunk = self.sock.recv(1 << 20)
             if not chunk:
@@ -139,12 +147,44 @@ class Automation:
                 raise AutomationError("86Box closed the automation socket")
             self._buf += chunk
         raw, self._buf = self._buf.split(b"\n", 1)
-        reply = json.loads(raw)
+        reply = json.loads(raw.decode("utf-8", "replace"))     # the log can hold any bytes
+        if reply.get("fatal"):
+            self.close()                                       # 86Box closes it after this line
+            raise AutomationError(f"86Box stopped with a fatal error: {reply.get('error')}")
         if not reply.get("ok"):
             raise AutomationError(reply.get("error", "unknown error"))
-        if reply.get("stopped") == "debugger" and self.on_debugger_stop:
-            return self.on_debugger_stop(line, reply)
         return reply
+
+    def put_file(self, name: str, path: str | os.PathLike) -> dict:
+        """Send a file to 86Box (media put), for an 86Box on another machine; it lands in the VM
+        directory's automation-media folder, and the reply's "path" is where 86Box can open it."""
+        size = os.path.getsize(path)
+        with self._lock:
+            if not self.sock:
+                self.connect()
+            assert self.sock
+            try:
+                self.sock.sendall(f"media put {name} {size}\n".encode())
+                with open(path, "rb") as f:
+                    while chunk := f.read(1 << 20):
+                        self.sock.sendall(chunk)
+            except OSError:
+                self.close()        # part of a file in flight: the connection can't be used again
+                raise
+            return self._reply()
+
+    def can_put_files(self) -> bool:
+        """Whether this 86Box takes files over the connection (media put): asking it to remove a file
+        by a name it never accepts tells an 86Box that has the command from one that hasn't."""
+        try:
+            self.call("media remove .")
+        except AutomationError as e:
+            return "bad name" in str(e)
+        return True
+
+    def log(self, start: int = 0) -> dict:
+        """What 86Box has logged from position `start` on (its last 64 KB), with "text" and "next"."""
+        return self.call(f"log {start}")
 
     # Convenience wrappers ------------------------------------------------
 
