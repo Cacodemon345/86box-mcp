@@ -615,8 +615,8 @@ script. Most tools work the same over the connection:
 - **The debugger** connects to the GDB stub on the endpoint's host, at the
   port 86Box reports, or at `vm_attach(gdb_port=...)`.
 
-These need 86Box's `media put` and `log` commands (sending media, the log,
-fatal errors and the stub's port), which aren't upstream yet. Without them,
+These need [86Box#8466](https://github.com/86Box/86Box/pull/8466) (sending
+media, the log, fatal errors and the stub's port), which isn't merged yet. Without them,
 media paths are paths on 86Box's machine, there's no log tail, and the
 debugger assumes the stub's default port, 12345.
 

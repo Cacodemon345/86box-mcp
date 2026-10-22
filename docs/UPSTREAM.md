@@ -48,9 +48,9 @@ Also merged on 2026-10-20, for serial ports and repeatable runs:
 | [#8439](https://github.com/86Box/86Box/pull/8439) | The `automation` serial backend (`serialN_device = automation`): `serial read`, `serial write`, `serial lines`, `wait serial`, and COM ports in `info` (`vm_start(serial=...)`, `serial_write`, `serial_link`, `serial_attach`). Input reaches the guest at its line rate |
 | [#8438](https://github.com/86Box/86Box/pull/8438) | `--automation-seed n`: 86Box's random numbers (generated MACs, 86F weak bits) from a fixed seed instead of the host's timestamp counter |
 
-Not submitted yet, on the `automation-remote` branch of
-[dafugg/86Box](https://github.com/dafugg/86Box/tree/automation-remote), for
-driving an 86Box on another machine:
+Open, for driving an 86Box on another machine
+([#8466](https://github.com/86Box/86Box/pull/8466), branch `automation-remote`
+of [dafugg/86Box](https://github.com/dafugg/86Box/tree/automation-remote)):
 
 | Change | What it adds |
 |---|---|
