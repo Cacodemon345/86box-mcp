@@ -164,10 +164,14 @@ class Automation:
                 self.connect()
             assert self.sock
             try:
-                self.sock.sendall(f"media put {name} {size}\n".encode())
                 with open(path, "rb") as f:
-                    while chunk := f.read(1 << 20):
+                    self.sock.sendall(f"media put {name} {size}\n".encode())
+                    left = size
+                    while left and (chunk := f.read(min(left, 1 << 20))):
                         self.sock.sendall(chunk)
+                        left -= len(chunk)
+                    if left:            # it shrank on the way: 86Box would wait for the rest forever
+                        raise OSError(f"{path} changed while it was being sent")
             except OSError:
                 self.close()        # part of a file in flight: the connection can't be used again
                 raise

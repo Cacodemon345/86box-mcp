@@ -110,3 +110,79 @@ def test_an_older_86box_gets_paths_not_files(tmp_path):
     assert AttachedVM(FakeBox(answer).endpoint, gdb_port=1234)._stub_port() == 1234
     assert v.log_tail() == ""
     assert not any(line.startswith("media put") for line in seen), seen
+
+
+@pytest.mark.parametrize("transport", ["tcp", "unix"])
+def test_media_put_failures(tmp_path, monkeypatch, transport):
+    """Names that would leave the folder, names the OS refuses, a full disk, a folder it can't write and
+    a connection that drops part way: each gets an error with the reason, leaves no partial file, and
+    the connection (or the next one) works on."""
+    from box86mcp.vm import VM
+
+    monkeypatch.setenv("BOX86_TRANSPORT", transport)
+    vm = VM(make_dos_vm(tmp_path / "vm"))
+    vm.start(held=True)
+    media = tmp_path / "vm" / "automation-media"
+    a = vm.auto
+    try:
+        if not a.can_put_files():
+            pytest.skip("86Box without media put")
+
+        def put(name, data):
+            a.sock.sendall(f"media put {name} {len(data)}\n".encode() + data)
+            try:
+                return a._reply()
+            except AutomationError as e:
+                return {"ok": False, "error": str(e)}
+
+        assert put("fine.img", b"x" * 1000)["ok"]
+        for name in ("../up.img", "a/b.img", "..", "a\\b", "c:x"):
+            assert "bad name" in put(name, b"y" * 3000)["error"], name
+            assert a.status()["ok"]                         # the bytes were taken, not read as requests
+        assert not (tmp_path / "vm" / "up.img").exists()
+        # Anything else is up to the OS, and its reason comes back.
+        assert "File name too long" in put("x" * 300, b"y" * 3000)["error"]
+        assert a.status()["ok"]
+
+        # A full disk: the file being written is /dev/full.
+        (media / "full.img.part").symlink_to("/dev/full")
+        r = put("full.img", os.urandom(200000))
+        assert "No space left" in r["error"], r
+        assert not (media / "full.img").exists() and not (media / "full.img.part").is_symlink()
+
+        # A folder it can't write to.
+        media.chmod(0o555)
+        try:
+            assert "Permission denied" in put("ro.img", b"x" * 100)["error"]
+        finally:
+            media.chmod(0o755)
+
+        # Something in the way of the finished file: the error, and the partial file goes.
+        (media / "dir.img").mkdir()
+        assert "cannot replace" in put("dir.img", b"x" * 100)["error"]
+        assert (media / "dir.img").is_dir() and not (media / "dir.img.part").exists()
+
+        assert "No such file" in str(pytest.raises(AutomationError, a.call, "media remove gone.img").value)
+
+        # The connection drops part way: no partial file, and the next client is served.
+        a.sock.sendall(b"media put drop.img 1000000\n" + b"x" * 5000)
+        a.close()
+        a.connect()
+        assert a.status()["ok"]
+        assert not (media / "drop.img").exists() and not (media / "drop.img.part").exists()
+        assert sorted(p.name for p in media.iterdir()) == ["dir.img", "fine.img"]
+    finally:
+        vm.stop()
+
+
+def test_a_file_that_shrinks_while_it_is_sent(tmp_path, monkeypatch):
+    """The size goes first; if the file then has fewer bytes, 86Box would wait for the rest forever."""
+    got = []
+    box = FakeBox(lambda line: got.append(line) or None)
+    f = tmp_path / "f.img"
+    f.write_bytes(b"x" * 100)
+    monkeypatch.setattr(os.path, "getsize", lambda p: 1000)
+    a = Automation(box.endpoint)
+    with pytest.raises(OSError, match="changed while it was being sent"):
+        a.put_file("f.img", f)
+    assert a.sock is None

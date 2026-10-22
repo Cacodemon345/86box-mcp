@@ -748,9 +748,9 @@ class VM:
 
 
 def _media_name(name: str) -> str:
-    """A file name as 86Box's media put accepts it: letters, digits, ".", "-" and "_"."""
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[-128:]
-    return "_" + name[1:] if name.startswith(".") else name
+    """A file name as media put can carry it: one word, with no path in it. The OS there judges the rest."""
+    name = re.sub(r"[\s/\\:]", "_", name)
+    return "_" if name in ("", ".", "..") else name
 
 
 class AttachedVM(VM):
@@ -824,8 +824,8 @@ class AttachedVM(VM):
         return self._sent[key]
 
     def _send_cue(self, cue: Path) -> str:
-        """A cue sheet and the track files it names, under names 86Box accepts, with the sheet
-        rewritten to match."""
+        """A cue sheet and the track files it names, under names media put can carry (no spaces),
+        with the sheet rewritten to match."""
         text = cue.read_text(errors="replace")
 
         def track(m: re.Match) -> str:
