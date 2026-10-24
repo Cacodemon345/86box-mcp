@@ -61,7 +61,7 @@ remote-enabled 86Box on the internet, is open):
 | `info` `gdbstub_port` | The GDB stub's port, so an attached VM's debugger finds it |
 
 `86BOX_COMMIT` names an upstream commit with all of them: master as of
-2026-10-20 (`1de9fc333`), the merge of #8439.
+2026-10-22 (`1be46d317`), the merge of #8466.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 
