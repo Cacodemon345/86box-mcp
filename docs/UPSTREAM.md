@@ -51,7 +51,7 @@ Also merged on 2026-10-20, for serial ports and repeatable runs:
 Merged on 2026-10-22, for driving an 86Box on another machine
 ([#8466](https://github.com/86Box/86Box/pull/8466); its doc follow-up,
 [#8467](https://github.com/86Box/86Box/pull/8467), warning never to put a
-remote-enabled 86Box on the internet, is open):
+remote-enabled 86Box on the internet, merged the same day):
 
 | Change | What it adds |
 |---|---|
@@ -60,8 +60,9 @@ remote-enabled 86Box on the internet, is open):
 | fatal errors | A connected client gets `{"ok":false,"fatal":true,"error":...}` before the socket closes |
 | `info` `gdbstub_port` | The GDB stub's port, so an attached VM's debugger finds it |
 
-`86BOX_COMMIT` names an upstream commit with all of them: master as of
-2026-10-22 (`1be46d317`), the merge of #8466.
+`86BOX_MIN_COMMIT` is the minimum 86Box for every MCP tool: an upstream
+commit with all of the above, the merge of #8466 (`1be46d317`, 2026-10-22).
+Any later master works too; the build scripts only warn about an older one.
 The server checks for `ff` in `status` before sending `quit soft`, because an
 older 86Box takes any `quit ...` as a hard quit.
 

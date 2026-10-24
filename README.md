@@ -732,7 +732,7 @@ This is an early release, built for developing our own DOS games and tools.
   watchpoints on RAM don't fire. See
   [docs/driver-development.md](docs/driver-development.md#setting-up-the-debugger).
 - **Sound, and recordings of a VM on another machine, need an 86Box from
-  2026-10-20 or later** (`86BOX_COMMIT` or newer), with
+  2026-10-20 or later** (`86BOX_MIN_COMMIT` or newer), with
   [#8419](https://github.com/86Box/86Box/pull/8419),
   [#8420](https://github.com/86Box/86Box/pull/8420) and
   [#8421](https://github.com/86Box/86Box/pull/8421) (all merged). With them,
@@ -745,7 +745,7 @@ This is an early release, built for developing our own DOS games and tools.
   86Box threads, so they are dated by when each block arrives, within one
   block (20-100 ms). Nothing can be sent to the guest's line-in or microphone
   yet, and MIDI sent to a host MIDI device isn't captured.
-- **Serial ports need an 86Box from 2026-10-20 or later** (`86BOX_COMMIT` or
+- **Serial ports need an 86Box from 2026-10-20 or later** (`86BOX_MIN_COMMIT` or
   newer), with [#8439](https://github.com/86Box/86Box/pull/8439) (merged), for
   input to the guest, COM2-4, links and modems. On an older 86Box, the guest's
   writes to COM1 can still be read through a file (`vm_start(com1_log=True)`,
