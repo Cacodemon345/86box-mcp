@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -294,8 +295,6 @@ def _rewrite_cfg(cfg: Path, lines: list[str]) -> None:
 
 def _free_port() -> int:
     """An unused loopback TCP port (86Box binds it a moment later)."""
-    import socket
-
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -330,6 +329,8 @@ class VM:
             self.token_file = None if INSECURE else str(self.run_dir / "automation.token")
             self.endpoint = f"tcp:127.0.0.1:{_free_port()}"
         elif self.transport == "unix":
+            if not hasattr(socket, "AF_UNIX"):
+                raise ValueError("BOX86_TRANSPORT=unix: this Python has no UNIX sockets (Windows); use tcp")
             self.token_file = None
             self.endpoint = "unix:" + str(self.run_dir / "automation.sock")
         else:

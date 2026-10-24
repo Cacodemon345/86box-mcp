@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -14,8 +15,11 @@ from box86mcp.protocol import Automation, AutomationError
 from conftest import make_dos_vm
 from test_sound import run
 
+TRANSPORTS = ["tcp", pytest.param("unix", marks=pytest.mark.skipif(not hasattr(socket, "AF_UNIX"),
+                                                               reason="no UNIX sockets"))]
 
-@pytest.mark.parametrize("transport", ["tcp", "unix"])
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
 def test_media_and_log_reach_an_attached_86box(tmp_path, monkeypatch, transport):
     from box86mcp.vm import VM
 
@@ -51,10 +55,11 @@ def test_media_and_log_reach_an_attached_86box(tmp_path, monkeypatch, transport)
     finally:
         vm.stop()
     media = tmp_path / "vm" / "automation-media"
-    assert out["info"]["floppy"][0]["file"].startswith(str(media)), out
+    # As Paths: 86Box on Windows gives them with forward slashes.
+    assert Path(out["info"]["floppy"][0]["file"]).parent == media, out
     assert "matched" in out["typed"] or "found" in out["typed"], out["typed"]
     # The cue sheet went with its track, renamed to a name 86Box takes and rewritten to match.
-    assert out["info"]["cdrom"][0]["file"] == str(media / "disc.cue"), out
+    assert Path(out["info"]["cdrom"][0]["file"]) == media / "disc.cue", out
     assert (media / "my_track.bin").stat().st_size == 2352 * 300
     assert '"my_track.bin"' in (media / "disc.cue").read_text()
     assert "86Box" in out["status"]["log_tail"] or "Automation" in out["status"]["log_tail"], out["status"]
@@ -112,7 +117,7 @@ def test_an_older_86box_gets_paths_not_files(tmp_path):
     assert not any(line.startswith("media put") for line in seen), seen
 
 
-@pytest.mark.parametrize("transport", ["tcp", "unix"])
+@pytest.mark.parametrize("transport", TRANSPORTS)
 def test_media_put_failures(tmp_path, monkeypatch, transport):
     """Names that would leave the folder, names the OS refuses, a full disk, a folder it can't write and
     a connection that drops part way: each gets an error with the reason, leaves no partial file, and
@@ -140,22 +145,28 @@ def test_media_put_failures(tmp_path, monkeypatch, transport):
             assert "bad name" in put(name, b"y" * 3000)["error"], name
             assert a.status()["ok"]                         # the bytes were taken, not read as requests
         assert not (tmp_path / "vm" / "up.img").exists()
-        # Anything else is up to the OS, and its reason comes back.
-        assert "File name too long" in put("x" * 300, b"y" * 3000)["error"]
+        # Anything else is up to the OS, and its reason comes back (Windows calls a name too long
+        # a file that isn't there).
+        reason = "No such file" if os.name == "nt" else "File name too long"
+        assert reason in put("x" * 300, b"y" * 3000)["error"]
         assert a.status()["ok"]
+        if os.name == "nt":                                 # characters Windows doesn't allow in names
+            assert "Invalid argument" in put("f*g.img", b"y" * 3000)["error"]
+            assert a.status()["ok"]
 
-        # A full disk: the file being written is /dev/full.
-        (media / "full.img.part").symlink_to("/dev/full")
-        r = put("full.img", os.urandom(200000))
-        assert "No space left" in r["error"], r
-        assert not (media / "full.img").exists() and not (media / "full.img.part").is_symlink()
+        if os.name != "nt":                                 # no /dev/full, and chmod can't stop writes
+            # A full disk: the file being written is /dev/full.
+            (media / "full.img.part").symlink_to("/dev/full")
+            r = put("full.img", os.urandom(200000))
+            assert "No space left" in r["error"], r
+            assert not (media / "full.img").exists() and not (media / "full.img.part").is_symlink()
 
-        # A folder it can't write to.
-        media.chmod(0o555)
-        try:
-            assert "Permission denied" in put("ro.img", b"x" * 100)["error"]
-        finally:
-            media.chmod(0o755)
+            # A folder it can't write to.
+            media.chmod(0o555)
+            try:
+                assert "Permission denied" in put("ro.img", b"x" * 100)["error"]
+            finally:
+                media.chmod(0o755)
 
         # Something in the way of the finished file: the error, and the partial file goes.
         (media / "dir.img").mkdir()
