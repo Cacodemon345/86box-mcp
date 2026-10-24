@@ -351,12 +351,12 @@ class VM:
     def start(self, held: bool = True, window: bool | None = None, extra_args: list[str] | None = None,
               com1_log: bool = False, debugger: bool = False, serial_ports: list[int] | None = None) -> dict:
         """Launch 86Box. window=True shows the normal 86Box window (on $DISPLAY, outside Windows);
-        the default, None, shows it on Windows and runs headless elsewhere. com1_log=True captures
-        COM1 output (off by default: with it, runs are not always byte-for-byte reproducible).
-        debugger=True attaches to 86Box's GDB stub, for breakpoints, instruction steps and port I/O
-        (86Box built with -D GDBSTUB=ON); see self.gdb. serial_ports: COM ports to give the
-        automation backend (both directions over the automation socket; needs an 86Box with it), e.g.
-        [1]; COM1 there takes precedence over com1_log."""
+        the default, None, shows it on Windows and runs headless elsewhere (BOX86_WINDOW=1 or 0 sets
+        it). com1_log=True captures COM1 output (off by default: with it, runs are not always
+        byte-for-byte reproducible). debugger=True attaches to 86Box's GDB stub, for breakpoints,
+        instruction steps and port I/O (86Box built with -D GDBSTUB=ON); see self.gdb. serial_ports:
+        COM ports to give the automation backend (both directions over the automation socket; needs
+        an 86Box with it), e.g. [1]; COM1 there takes precedence over com1_log."""
         if not (self.vm_dir / "86box.cfg").exists():
             raise FileNotFoundError(f"{self.vm_dir}/86box.cfg not found")
         if not self.binary.exists():
@@ -400,7 +400,8 @@ class VM:
         args += extra_args or []
         env = dict(os.environ)
         if window is None:
-            window = os.name == "nt"
+            default = os.environ.get("BOX86_WINDOW", "")
+            window = default == "1" if default in ("0", "1") else os.name == "nt"
         self.windowed = window
         if window and os.name == "nt":
             env.pop("QT_QPA_PLATFORM", None)   # Windows: Qt's native platform shows the window

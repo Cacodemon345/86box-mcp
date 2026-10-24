@@ -41,7 +41,7 @@ def test_failures_say_why(tmp_path):
 
 def test_vm_start_remembers_the_last_vm(tmp_path):
     vm = make_dos_vm(tmp_path / "vm")
-    first = _session(tmp_path / "cache", [("vm_start", {"vm_dir": str(vm), "window": False}), ("vm_stop", {})])
+    first = _session(tmp_path / "cache", [("vm_start", {"vm_dir": str(vm)}), ("vm_stop", {})])
     assert not first[0][0], first
-    again = _session(tmp_path / "cache", [("vm_start", {"window": False}), ("vm_stop", {})])
+    again = _session(tmp_path / "cache", [("vm_start", {}), ("vm_stop", {})])
     assert not again[0][0] and str(vm) in again[0][1], again

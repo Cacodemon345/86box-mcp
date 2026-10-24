@@ -19,6 +19,10 @@ PRIMED_NVR = Path(os.path.expanduser(os.environ["BOX86_TEST_NVR"])) if os.enviro
 
 AUTOEXEC = "@ECHO OFF\r\nPROMPT $P$G\r\n"
 
+# No 86Box windows from the tests, on Windows too, where VMs show one by default: set here, so the
+# server processes the tests start get it as well. BOX86_TEST_WINDOW=1 shows them, to watch a test.
+os.environ["BOX86_WINDOW"] = "1" if os.environ.get("BOX86_TEST_WINDOW") == "1" else "0"
+
 
 def make_dos_vm(dest: Path) -> Path:
     if not BASE_IMG.is_file():
@@ -37,20 +41,6 @@ def make_dos_vm(dest: Path) -> Path:
                    check=True, env=MTOOLS_ENV)
     autoexec.unlink()
     return dest
-
-
-@pytest.fixture(autouse=True)
-def headless(monkeypatch):
-    """No 86Box windows from the tests, on Windows too, where VM.start shows one by default.
-    BOX86_TEST_WINDOW=1 shows them, to watch a test."""
-    if os.environ.get("BOX86_TEST_WINDOW") == "1":
-        return
-    start = VM.start
-
-    def start_headless(self, *args, window=None, **kwargs):
-        return start(self, *args, window=False if window is None else window, **kwargs)
-
-    monkeypatch.setattr(VM, "start", start_headless)
 
 
 @pytest.fixture

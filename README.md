@@ -147,7 +147,8 @@ Windows ourselves yet.
 
 On Windows the server talks to 86Box over TCP on `127.0.0.1`, with a token
 (there are no UNIX sockets). `vm_start` shows the normal 86Box window by
-default there; pass `window=False` to run headless. The
+default there; pass `window=False` to run headless, or set `BOX86_WINDOW=0`
+to make that the default (`BOX86_WINDOW=1` shows it on other systems). The
 DOS disk tools (`dos_create_vm`, `dos_install_files`, `dos_put_floppy`) need
 mtools (`mformat`, `mcopy`, `mmd`, `mattrib`) on `PATH` or in
 `BOX86_MTOOLS_DIR`; MSYS2 has a `mtools` package. Recordings need `ffmpeg`

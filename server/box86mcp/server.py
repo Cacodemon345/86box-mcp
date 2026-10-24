@@ -356,7 +356,8 @@ def vm_start(vm_dir: str | None = None, held: bool = True, window: bool | None =
 
     held=True (default) freezes emulated time between tool calls, for deterministic, turn-based control.
     window=True shows the 86Box window on the host's display so a person can watch (and also type),
-    and window=False runs without one. By default the window shows on Windows, and not elsewhere.
+    and window=False runs without one. By default the window shows on Windows, and not elsewhere
+    (BOX86_WINDOW=1 or 0 sets the default).
     serial: COM ports to carry over the automation socket, both ways and in emulated time, e.g. [1]
     or [1, 2]: serial_read, wait_for_serial and serial_write use them, and serial_attach and
     serial_link put something at the other end. Needs an 86Box with the automation serial backend.

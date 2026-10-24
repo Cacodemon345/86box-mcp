@@ -174,7 +174,7 @@ def test_debugger_through_an_mcp_client(tmp_path):
                     res = await s.call_tool(tool, args)
                     return res.is_error, "".join(c.text for c in res.content if c.type == "text")
 
-                out = {"start": await call("vm_start", vm_dir=str(vm_dir), debugger=True, window=False),
+                out = {"start": await call("vm_start", vm_dir=str(vm_dir), debugger=True),
                        "prompt": await call("wait_for_text", text="C:\\>", timeout_ms=30000)}
                 ivt = bytes.fromhex("".join((await call("read_memory", addr=0x20, length=4))[1].split()[1:5]))
                 isr = int.from_bytes(ivt[2:], "little") * 16 + int.from_bytes(ivt[:2], "little")
